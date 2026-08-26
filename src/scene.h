@@ -10,13 +10,15 @@
 #endif
 
 #ifdef RENDER_GL
-#ifdef GLAD
+#if defined(__vita__)
+#include <vitaGL.h>
+#elif defined(GLAD)
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
 #include <GL/glu.h>
 #endif
-#if !defined(SDL12) && !defined(__SWITCH__)
+#if !defined(SDL12) && !defined(__SWITCH__) && !defined(__vita__)
 #include <SDL_opengl.h>
 #endif
 
@@ -93,6 +95,15 @@ typedef struct GlModelTime {
     GameModel *game_model;
     float time;
 } GlModelTime;
+
+// scratch entry for sorting opaque GL models; dist2 in int64 since world coords reach ~1e6
+typedef struct GlOpaqueSortEntry {
+    GameModel *model;
+    int64_t dist2;
+
+    // 1 = need not draw this frame; state-compatible hidden models can still bridge merged runs
+    int hidden;
+} GlOpaqueSortEntry;
 #endif
 
 struct Scene {
@@ -178,6 +189,11 @@ struct Scene {
     /* for wallobjects */
     gl_vertex_buffer **gl_wall_buffers;
 
+    // for the region's static scenery, baked to world space at region load so
+    // the opaque pass can merge adjacent models into single draws
+    gl_vertex_buffer **gl_object_buffers;
+    int gl_object_buffer_length;
+
     mat4 gl_view;
     mat4 gl_projection;
     mat4 gl_projection_view;
@@ -203,6 +219,10 @@ struct Scene {
 
     int gl_mouse_picked_count;
 
+    // per-frame scratch for front-to-back sorting opaque models (early-Z)
+    GlOpaqueSortEntry *gl_opaque_sorted;
+    int gl_opaque_sorted_size;
+
     float *gl_sprite_depth_bottom;
     float *gl_sprite_depth_top;
 
@@ -217,7 +237,10 @@ struct Scene {
 #ifdef RENDER_GL
     Shader game_model_shader;
 
-#ifdef EMSCRIPTEN
+    // Vita-only no-discard variant of game_model_shader for flat opaque models, keeps early-Z
+    Shader game_model_shader_noclip;
+
+#if defined(EMSCRIPTEN) || defined(__vita__)
     Shader game_model_pick_shader;
 
     gl_vertex_buffer gl_pick_buffer;

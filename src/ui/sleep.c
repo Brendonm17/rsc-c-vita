@@ -157,7 +157,7 @@ void mudclient_handle_sleep_input(mudclient *mud) {
             packet_stream_put_string(mud->packet_stream, mud->input_text_final);
 
 #ifndef REVISION_177
-            if (!mud->sleep_word_delay) {
+            if (!mud->protocol177 && !mud->sleep_word_delay) {
                 packet_stream_put_byte(mud->packet_stream, 0);
                 mud->sleep_word_delay = 1;
             }
@@ -195,7 +195,7 @@ void mudclient_handle_sleep_input(mudclient *mud) {
         packet_stream_put_string(mud->packet_stream, "-null-");
 
 #ifndef REVISION_177
-        if (!mud->sleep_word_delay) {
+        if (!mud->protocol177 && !mud->sleep_word_delay) {
             packet_stream_put_byte(mud->packet_stream, 0);
             mud->sleep_word_delay = 1;
         }

@@ -1,0 +1,25 @@
+// game-model no-discard fragment shader, Cg for psp2.
+// like game-model.fs.cg but omits clip()/discard so early-Z rejects overdraw on opaque geometry.
+// lighting ramps arrive per-vertex (game-model.vs.cg); samples, selects ramp, shades.
+// half-precision colour path (see game-model.fs.cg); texcoords stay float.
+uniform sampler2D model_texture : TEXUNIT0;
+uniform half opacity;
+
+half4 main(
+    half3 vertex_colour : TEXCOORD0,
+    float2 vertex_texture_position : TEXCOORD1,
+    half  vertex_light_lut : TEXCOORD2,
+    half  vertex_tex_lut : TEXCOORD3)
+{
+    half4 texture_colour = h4tex2D(model_texture, vertex_texture_position);
+
+    bool is_textured_light = !(texture_colour.r == 1.0h &&
+                               texture_colour.g == 1.0h &&
+                               texture_colour.b == 1.0h);
+
+    half lightness = is_textured_light ? vertex_tex_lut : vertex_light_lut;
+
+    half4 fragment_colour = half4(vertex_colour, opacity) * texture_colour;
+    fragment_colour.rgb = fragment_colour.rgb * lightness;
+    return fragment_colour;
+}

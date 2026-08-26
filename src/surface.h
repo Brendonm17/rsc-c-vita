@@ -35,7 +35,9 @@
 #endif
 
 #ifdef RENDER_GL
-#ifdef GLAD
+#if defined(__vita__)
+#include <vitaGL.h>
+#elif defined(GLAD)
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
@@ -73,6 +75,8 @@ typedef struct gl_atlas_position {
 #include "gl/textures/entities.h"
 #include "gl/textures/fonts.h"
 #include "gl/textures/media.h"
+#include "gl/textures/custom.h"
+#include "gl/textures/custom-entities.h"
 
 #define GL_MAX_QUADS 2048
 
@@ -94,6 +98,11 @@ typedef struct SurfaceGlContext {
     int max_y;
 
     int use_depth;
+
+#ifdef RENDER_GL
+    // 1 = apply bounds via glScissor at flush; 0 = quads pre-clipped, no scissor
+    int scissored;
+#endif
 } SurfaceGlContext;
 
 extern gl_atlas_position gl_white_atlas_position;
@@ -185,11 +194,22 @@ struct Surface {
     Shader gl_flat_shader;
 
     GLuint gl_sprite_texture;
+    GLuint gl_custom_texture; // separate atlas for OpenRSC custom item icons
+    GLuint gl_custom_entity_texture; // separate atlas: OpenRSC custom worn-equipment layers, no-body NPC bodies
     GLuint gl_entity_textures[ENTITY_TEXTURE_LENGTH];
 
     uint8_t *gl_dynamic_texture_buffer;
     GLuint gl_dynamic_texture;
     // GLuint gl_framebuffer_texture;
+
+#if defined(__vita__)
+    // off-screen render target: captures the 3D login background into sprites
+    GLuint gl_login_fbo;
+    GLuint gl_login_color_tex;
+    GLuint gl_login_depth_rb;
+    // set while login capture FBO bound: surface_gl_draw uses 1:1 scissor coords
+    int gl_capture_active;
+#endif
 
     // int32_t *gl_screen_pixels_reversed;
     int32_t *gl_screen_pixels;
@@ -212,6 +232,10 @@ struct Surface {
     /* used for texture array and boundary changes */
     SurfaceGlContext gl_contexts[GL_MAX_QUADS];
     int gl_context_count;
+
+    // client-side staging for the flat-quad batch, uploaded once per flush
+    gl_quad *gl_flat_staging;
+    int gl_flat_uploaded;
 #endif
 };
 
@@ -229,6 +253,9 @@ void surface_new(Surface *surface, int width, int height, int limit,
                  mudclient *mud);
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
+// GL half of surface_new(), called from surface.c
+void surface_gl_new(Surface *surface, int width, int height, int limit,
+                    mudclient *mud);
 float surface_gl_translate_x(Surface *surface, int x);
 float surface_gl_translate_y(Surface *surface, int y);
 void surface_gl_reset_context(Surface *surface);
@@ -242,6 +269,8 @@ void surface_gl_vertex_apply_depth(gl_quad_vertex *vertices, int length,
 void surface_gl_vertex_apply_rotation(gl_quad_vertex *vertex, float centre_x,
                                       float centre_y, float angle);
 #ifdef RENDER_GL
+gl_atlas_position surface_gl_login_atlas_position(Surface *surface,
+                                                  int sprite_id);
 void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, GLuint texture,
                             GLuint base_texture);
 #elif defined(RENDER_3DS_GL)
@@ -270,6 +299,18 @@ void surface_gl_blur_texture(Surface *surface, int sprite_id, int blur_height,
 void surface_gl_apply_login_filter(Surface *surface, int sprite_id);
 void surface_gl_raster_to_sprite(Surface *surface, int sprite_id, int x,
                                  int y, int width, int height);
+#if defined(__vita__)
+void surface_gl_capture_begin(Surface *surface);
+void surface_gl_capture_end(Surface *surface);
+#endif
+#endif
+
+#if defined(__vita__)
+// draws the virtual mouse cursor over the 2D frame
+void vita_draw_cursor(Surface *surface, int x, int y);
+// cursor style: 0 = crosshair, 1+ = named weapon item sprite
+int vita_cursor_style_count(void);
+const char *vita_cursor_style_name(int style);
 #endif
 
 void surface_set_bounds(Surface *surface, int min_x, int min_y, int max_x,
@@ -394,6 +435,8 @@ void surface_draw_status_bar(Surface *surface, int max, int current,
 #ifdef RENDER_GL
 void surface_gl_create_framebuffer(Surface *surface);
 void surface_gl_update_dynamic_texture(Surface *surface);
+void surface_gl_update_dynamic_texture_rows(Surface *surface, int y,
+                                            int height);
 #endif
 #ifdef RENDER_3DS_GL
 int surface_3ds_gl_get_sprite_texture_offsets(Surface *surface, int sprite_id,

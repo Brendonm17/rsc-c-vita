@@ -1,0 +1,27 @@
+// game-model (3D world) fragment shader, Cg for psp2.
+// lighting ramps arrive per-vertex (game-model.vs.cg); samples texture, picks flat/textured ramp, shades.
+// half-precision colour/ramp varyings (8-bit data, exact in half); texcoords stay float for atlas precision.
+uniform sampler2D model_texture : TEXUNIT0;
+uniform half opacity;
+
+half4 main(
+    half3 vertex_colour : TEXCOORD0,
+    float2 vertex_texture_position : TEXCOORD1,
+    half  vertex_light_lut : TEXCOORD2,
+    half  vertex_tex_lut : TEXCOORD3)
+{
+    half4 texture_colour = h4tex2D(model_texture, vertex_texture_position);
+
+    // GLSL "if (w <= 0.0) discard;" (alpha is 0 or 1 in the atlas)
+    clip(texture_colour.w - 0.5h);
+
+    bool is_textured_light = !(texture_colour.r == 1.0h &&
+                               texture_colour.g == 1.0h &&
+                               texture_colour.b == 1.0h);
+
+    half lightness = is_textured_light ? vertex_tex_lut : vertex_light_lut;
+
+    half4 fragment_colour = half4(vertex_colour, opacity) * texture_colour;
+    fragment_colour.rgb = fragment_colour.rgb * lightness;
+    return fragment_colour;
+}

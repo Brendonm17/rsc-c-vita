@@ -1,0 +1,5 @@
+// pick (face-tag) fragment shader (cg, psp2)
+float4 main(float4 vertex_colour : TEXCOORD0)
+{
+    return vertex_colour;
+}

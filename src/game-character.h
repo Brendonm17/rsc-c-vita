@@ -28,9 +28,15 @@ extern int character_walk_model[4];
 extern int character_combat_model_array1[8];
 extern int character_combat_model_array2[8];
 
-extern int player_hair_colours[10];
-extern int player_top_bottom_colours[15];
-extern int player_skin_colours[5];
+#define PLAYER_HAIR_COLOUR_COUNT 10
+#define PLAYER_TOP_BOTTOM_COLOUR_COUNT 15
+#define PLAYER_SKIN_COLOUR_COUNT 43
+// default unlocked skin colours: the 5 original RSC skins
+#define PLAYER_SKIN_COLOUR_BASE_COUNT 5
+
+extern int player_hair_colours[PLAYER_HAIR_COLOUR_COUNT];
+extern int player_top_bottom_colours[PLAYER_TOP_BOTTOM_COLOUR_COUNT];
+extern int player_skin_colours[PLAYER_SKIN_COLOUR_COUNT];
 
 typedef struct GameCharacter GameCharacter;
 
@@ -90,6 +96,19 @@ struct GameCharacter {
 
     int32_t attacking_player_server_index;
     int32_t attacking_npc_server_index;
+
+    // custom appearance update trailer, zeroed on authentic
+    char clan_tag[16]; // empty when the player is in no clan
+    int32_t icon; // (crownIndex + 1) << 24 | recolourMask24
+    uint8_t group_id;
+    uint8_t is_invisible;
+    uint8_t is_invulnerable;
+    // OpenRSC update type 8: a heal, the mirror of type 2's damage
+    uint8_t heal_taken;
+    uint8_t heal_timer;
+    // npc update type 6: npc weapon/wield, custom-only
+    uint8_t wield;
+    uint8_t wield2;
 };
 
 void game_character_new(GameCharacter *game_character);

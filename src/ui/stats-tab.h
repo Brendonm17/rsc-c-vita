@@ -4,6 +4,11 @@
 extern const char *short_skill_names[];
 extern const char *skill_names[];
 extern int skills_length;
+// xp needed for each level (filled at init)
+extern int experience_array[100];
+
+// skill name entries: 18 authentic + runecraft + harvest
+#define SKILL_NAMES_COUNT 20
 
 extern char **quest_names;
 extern int quests_length;

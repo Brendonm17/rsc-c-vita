@@ -1,5 +1,8 @@
 #include "world.h"
 
+#include "custom-rune-landscape.h"
+#include "custom-maps-landscape.h"
+
 static void world_set_blocked(World *, int, int, int);
 static void world_set_unblocked(World *, int, int, int);
 static int world_get_wall_east_west(World *, int, int);
@@ -18,6 +21,19 @@ static int world_get_terrain_height(World *, int, int);
 static int world_has_neighbouring_roof(World *, int, int);
 static void world_raise_wall_object(World *, int, int, int, int, int);
 static void world_create_wall(World *, GameModel *, int, int, int, int, int);
+
+// plane-0 quadrant arrays captured right after decode+fill
+static struct {
+    int8_t terrain_height[PLANE_COUNT][TILE_COUNT];
+    int8_t terrain_colour[PLANE_COUNT][TILE_COUNT];
+    int8_t walls_north_south[PLANE_COUNT][TILE_COUNT];
+    int8_t walls_east_west[PLANE_COUNT][TILE_COUNT];
+    uint16_t walls_diagonal[PLANE_COUNT][TILE_COUNT];
+    int8_t walls_roof[PLANE_COUNT][TILE_COUNT];
+    int8_t tile_decoration[PLANE_COUNT][TILE_COUNT];
+    int8_t tile_direction[PLANE_COUNT][TILE_COUNT];
+    int valid;
+} ground_snapshot;
 static void world_update_shadow_rect(World *, int, int, int, int);
 static void world_vertex_shadow(World *, int, int, int);
 static int world_get_tile_type(World *, int, int);
@@ -53,6 +69,8 @@ void world_new(World *world, Scene *scene, Surface *surface, int version) {
     world->surface = surface;
     world->player_alive = 0;
     world->version = version;
+    // default on (embedded SP / co-op); online paths set it explicitly at login and config parse
+    world->apply_custom_landscape = 1;
 }
 
 static void world_set_blocked(World *world, int x, int y, int value) {
@@ -93,7 +111,16 @@ static int world_get_wall_east_west(World *world, int x, int y) {
 static void world_set_terrain_ambience(World *world, int terrain_x,
                                        int terrain_y, int vertex_x,
                                        int vertex_y, int ambience) {
+    // guard an out-of-range chunk or a not-yet-built terrain model (NULL GameModel)
+    if (terrain_x < 0 || terrain_x >= 8 || terrain_y < 0 || terrain_y >= 8) {
+        return;
+    }
+
     GameModel *game_model = world->terrain_models[terrain_x + terrain_y * 8];
+
+    if (game_model == NULL) {
+        return;
+    }
 
     for (int i = 0; i < game_model->vertex_count; i++) {
         if (game_model->vertex_x[i] == vertex_x * TILE_SIZE &&
@@ -252,7 +279,9 @@ static void world_map_set_pixel(World *world, int x, int y, int colour) {
 #ifdef RENDER_SW
     surface_set_pixel(world->surface, x, y, colour);
 #elif defined(RENDER_GL)
-    uint8_t *texture_data = world->surface->gl_dynamic_texture_buffer;
+    uint8_t *texture_data = world->minimap_buffer != NULL
+                                ? world->minimap_buffer
+                                : world->surface->gl_dynamic_texture_buffer;
     int offset = ((SLEEP_HEIGHT + x) * 1024 + y) * 3;
 
     texture_data[offset] = (colour >> 16) & 0xff;
@@ -399,6 +428,28 @@ static void world_load_section_files(World *world, int x, int y, int plane,
     size_t map_name_length = strlen(map_name);
     size_t len = 0;
     uint8_t *map_data;
+
+    // additive rune-island terrain; (x, y) are absolute sector numbers like maps63 (sx from 48); rune sectors are sx
+    // 62-69
+    if (world->apply_custom_landscape &&
+        custom_rune_landscape_fill(
+            plane, x, y, world->terrain_height[chunk], world->terrain_colour[chunk],
+            world->walls_north_south[chunk], world->walls_east_west[chunk],
+            world->walls_diagonal[chunk], world->walls_roof[chunk],
+            world->tile_decoration[chunk], world->tile_direction[chunk])) {
+        return;
+    }
+
+    // additive OpenRSC custom-map terrain (sectors that differ from Authentic_Landscape.orsc); same numbering as
+    // maps63; a listed sector reproduces Custom_Landscape.orsc 1:1
+    if (world->apply_custom_landscape &&
+        custom_maps_landscape_fill(
+            plane, x, y, world->terrain_height[chunk], world->terrain_colour[chunk],
+            world->walls_north_south[chunk], world->walls_east_west[chunk],
+            world->walls_diagonal[chunk], world->walls_roof[chunk],
+            world->tile_decoration[chunk], world->tile_direction[chunk])) {
+        return;
+    }
 
     /* assume map in old file format */
     if (world->landscape_pack == NULL) {
@@ -702,16 +753,75 @@ static int world_get_terrain_colour(World *world, int x, int y) {
     return get_byte_plane_coord(world->terrain_colour, x, y);
 }
 
+// free built models without touching any scene; start_index walks the 576 slots; returns the next index, or -1 when
+// all up to limit were freed
+int world_free_models_step(World *world, int start_index, int max_slots) {
+    int total = TERRAIN_COUNT * (1 + PLANE_COUNT * 2);
+    int index = start_index;
+    int freed = 0;
+
+    while (index < total && freed < max_slots) {
+        int i = index % TERRAIN_COUNT;
+        int family = index / TERRAIN_COUNT;
+        GameModel **slot;
+
+        if (family == 0) {
+            slot = &world->terrain_models[i];
+        } else if (family <= PLANE_COUNT) {
+            slot = &world->wall_models[family - 1][i];
+        } else {
+            slot = &world->roof_models[family - 1 - PLANE_COUNT][i];
+        }
+
+        if (*slot != NULL) {
+            game_model_destroy(*slot);
+            free(*slot);
+            *slot = NULL;
+            freed++;
+        }
+
+        index++;
+    }
+
+    return index >= total ? -1 : index;
+}
+
+void world_free_models(World *world) {
+    world_free_models_step(world, 0, TERRAIN_COUNT * (1 + PLANE_COUNT * 2));
+
+    if (world->parent_model != NULL) {
+        game_model_destroy(world->parent_model);
+        free(world->parent_model);
+        world->parent_model = NULL;
+    }
+
+#if defined(RENDER_GL) || defined(RENDER_3DS_GL)
+    free(world->gl_world_models_buffer);
+    world->gl_world_models_buffer = NULL;
+    world->gl_world_models_offset = 0;
+#endif
+}
+
 void world_reset(World *world, int dispose) {
+    // a detached (prefetch) world's models are in no scene; never touch its scene here
+    int touch_scene = !world->detached;
+
     for (int i = 0; i < TERRAIN_COUNT; i++) {
-        scene_null_model(world->scene, world->terrain_models[i]);
+        // when disposing, scene_dispose below nulls the whole scene list in one pass
+        if (touch_scene && !dispose) {
+            scene_null_model(world->scene, world->terrain_models[i]);
+        }
+
         game_model_destroy(world->terrain_models[i]);
         free(world->terrain_models[i]);
 
         world->terrain_models[i] = NULL;
 
         for (int j = 0; j < PLANE_COUNT; j++) {
-            scene_null_model(world->scene, world->wall_models[j][i]);
+            if (touch_scene && !dispose) {
+                scene_null_model(world->scene, world->wall_models[j][i]);
+            }
+
             game_model_destroy(world->wall_models[j][i]);
             free(world->wall_models[j][i]);
 
@@ -719,7 +829,10 @@ void world_reset(World *world, int dispose) {
         }
 
         for (int j = 0; j < PLANE_COUNT; j++) {
-            scene_null_model(world->scene, world->roof_models[j][i]);
+            if (touch_scene && !dispose) {
+                scene_null_model(world->scene, world->roof_models[j][i]);
+            }
+
             game_model_destroy(world->roof_models[j][i]);
             free(world->roof_models[j][i]);
 
@@ -727,7 +840,7 @@ void world_reset(World *world, int dispose) {
         }
     }
 
-    if (dispose) {
+    if (dispose && touch_scene) {
         /* disable dispose for the login-screen models so we can free them */
         scene_dispose(world->scene);
     }
@@ -761,6 +874,30 @@ static int world_get_wall_north_south(World *world, int x, int y) {
 
 int world_get_tile_direction(World *world, int x, int y) {
     return get_byte_plane_coord(world->tile_direction, x, y);
+}
+
+// mirror of get_byte_plane_coord's (x, y) -> (plane, index) mapping, but assigning; out-of-region coords are dropped
+// silently
+void world_set_tile_direction(World *world, int x, int y, int direction) {
+    if (x < 0 || x >= REGION_WIDTH || y < 0 || y >= REGION_HEIGHT) {
+        return;
+    }
+
+    int8_t plane = 0;
+
+    if (x >= REGION_SIZE && y < REGION_SIZE) {
+        plane = 1;
+        x -= REGION_SIZE;
+    } else if (x < REGION_SIZE && y >= REGION_SIZE) {
+        plane = 2;
+        y -= REGION_SIZE;
+    } else if (x >= REGION_SIZE && y >= REGION_SIZE) {
+        plane = 3;
+        x -= REGION_SIZE;
+        y -= REGION_SIZE;
+    }
+
+    world->tile_direction[plane][x * REGION_SIZE + y] = (int8_t)direction;
 }
 
 static int world_get_tile_decoration(World *world, int x, int y) {
@@ -1009,6 +1146,26 @@ static void world_load_assemble(World *world, int x, int y, int plane,
 
     world_fill_edges(world);
 
+    if (plane == 0 && is_current_plane) {
+        memcpy(ground_snapshot.terrain_height, world->terrain_height,
+               sizeof(world->terrain_height));
+        memcpy(ground_snapshot.terrain_colour, world->terrain_colour,
+               sizeof(world->terrain_colour));
+        memcpy(ground_snapshot.walls_north_south, world->walls_north_south,
+               sizeof(world->walls_north_south));
+        memcpy(ground_snapshot.walls_east_west, world->walls_east_west,
+               sizeof(world->walls_east_west));
+        memcpy(ground_snapshot.walls_diagonal, world->walls_diagonal,
+               sizeof(world->walls_diagonal));
+        memcpy(ground_snapshot.walls_roof, world->walls_roof,
+               sizeof(world->walls_roof));
+        memcpy(ground_snapshot.tile_decoration, world->tile_decoration,
+               sizeof(world->tile_decoration));
+        memcpy(ground_snapshot.tile_direction, world->tile_direction,
+               sizeof(world->tile_direction));
+        ground_snapshot.valid = 1;
+    }
+
     if (world->parent_model == NULL) {
         world->parent_model = malloc(sizeof(GameModel));
     } else {
@@ -1021,7 +1178,9 @@ static void world_load_assemble(World *world, int x, int y, int plane,
     /* create terrain */
 
     if (is_current_plane) {
-        surface_black_screen(world->surface);
+        if (!world->defer_scene_adds) {
+            surface_black_screen(world->surface);
+        }
 
         for (int r_x = 0; r_x < REGION_WIDTH; r_x++) {
             for (int r_y = 0; r_y < REGION_HEIGHT; r_y++) {
@@ -1078,8 +1237,10 @@ static void world_load_assemble(World *world, int x, int y, int plane,
                 int vertex_index = game_model_vertex_at(
                     game_model, r_x * TILE_SIZE, height, r_y * TILE_SIZE);
 
-                int ambience =
-                    (int)(((float)rand() / (float)RAND_MAX) * 10) - 5;
+                // per-vertex lighting jitter derived from the tile position, range -5..+4
+                unsigned int h = (unsigned int)r_x * 73856093u ^
+                                 (unsigned int)r_y * 19349663u;
+                int ambience = (int)(h % 10u) - 5;
 
                 game_model_set_vertex_ambience(game_model, vertex_index,
                                                ambience);
@@ -1549,7 +1710,9 @@ static void world_load_assemble(World *world, int x, int y, int plane,
                          8, 64, 233, 0);
 
         for (int i = 0; i < TERRAIN_COUNT; i++) {
-            scene_add_model(world->scene, world->terrain_models[i]);
+            if (!world->defer_scene_adds) {
+                scene_add_model(world->scene, world->terrain_models[i]);
+            }
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
             world->gl_world_models_buffer[world->gl_world_models_offset++] =
@@ -1659,7 +1822,7 @@ static void world_load_assemble(World *world, int x, int y, int plane,
         }
     }
 
-    if (is_current_plane) {
+    if (is_current_plane && !world->defer_scene_adds) {
 #ifdef RENDER_GL
         surface_gl_update_dynamic_texture(world->surface);
 #endif
@@ -1681,7 +1844,9 @@ static void world_load_assemble(World *world, int x, int y, int plane,
     /* add walls */
 
     for (int i = 0; i < TERRAIN_COUNT; i++) {
-        scene_add_model(world->scene, world->wall_models[plane][i]);
+        if (!world->defer_scene_adds) {
+            scene_add_model(world->scene, world->wall_models[plane][i]);
+        }
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
         world->gl_world_models_buffer[world->gl_world_models_offset++] =
@@ -2163,7 +2328,9 @@ static void world_load_assemble(World *world, int x, int y, int plane,
                      8, 64, 169, 1);
 
     for (int i = 0; i < TERRAIN_COUNT; i++) {
-        scene_add_model(world->scene, world->roof_models[plane][i]);
+        if (!world->defer_scene_adds) {
+            scene_add_model(world->scene, world->roof_models[plane][i]);
+        }
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
         world->gl_world_models_buffer[world->gl_world_models_offset++] =
@@ -2377,6 +2544,20 @@ static int world_get_terrain_height(World *world, int x, int y) {
 }
 
 void world_load_section(World *world, int x, int y, int plane) {
+    // zero the arrays so every load starts from a clean slate
+    memset(world->terrain_height, 0, sizeof(world->terrain_height));
+    memset(world->terrain_colour, 0, sizeof(world->terrain_colour));
+    memset(world->walls_north_south, 0, sizeof(world->walls_north_south));
+    memset(world->walls_east_west, 0, sizeof(world->walls_east_west));
+    memset(world->walls_diagonal, 0, sizeof(world->walls_diagonal));
+    memset(world->walls_roof, 0, sizeof(world->walls_roof));
+    memset(world->tile_decoration, 0, sizeof(world->tile_decoration));
+    memset(world->tile_direction, 0, sizeof(world->tile_direction));
+
+    // face-index -> walk-coord maps are written sparsely; zero the tails
+    memset(world->local_x, 0, sizeof(world->local_x));
+    memset(world->local_y, 0, sizeof(world->local_y));
+
     world_reset(world, 1);
 
     int section_x = (x + (REGION_SIZE / 2)) / REGION_SIZE;
@@ -2398,18 +2579,67 @@ void world_load_section(World *world, int x, int y, int plane) {
         world_load_assemble(world, x, y, 1, 0);
         world_load_assemble(world, x, y, 2, 0);
 
-        world_load_section_files(world, section_x - 1, section_y - 1, plane, 0);
+        // restore ground-floor data from the snapshot taken after decode+fill
+        if (ground_snapshot.valid) {
+            memcpy(world->terrain_height, ground_snapshot.terrain_height,
+                   sizeof(world->terrain_height));
+            memcpy(world->terrain_colour, ground_snapshot.terrain_colour,
+                   sizeof(world->terrain_colour));
+            memcpy(world->walls_north_south, ground_snapshot.walls_north_south,
+                   sizeof(world->walls_north_south));
+            memcpy(world->walls_east_west, ground_snapshot.walls_east_west,
+                   sizeof(world->walls_east_west));
+            memcpy(world->walls_diagonal, ground_snapshot.walls_diagonal,
+                   sizeof(world->walls_diagonal));
+            memcpy(world->walls_roof, ground_snapshot.walls_roof,
+                   sizeof(world->walls_roof));
+            memcpy(world->tile_decoration, ground_snapshot.tile_decoration,
+                   sizeof(world->tile_decoration));
+            memcpy(world->tile_direction, ground_snapshot.tile_direction,
+                   sizeof(world->tile_direction));
+        } else {
+            world_load_section_files(world, section_x - 1, section_y - 1,
+                                     plane, 0);
 
-        world_load_section_files(world, section_x, section_y - 1, plane, 1);
-        world_load_section_files(world, section_x - 1, section_y, plane, 2);
-        world_load_section_files(world, section_x, section_y, plane, 3);
+            world_load_section_files(world, section_x, section_y - 1, plane,
+                                     1);
+            world_load_section_files(world, section_x - 1, section_y, plane,
+                                     2);
+            world_load_section_files(world, section_x, section_y, plane, 3);
 
-        world_fill_edges(world);
+            world_fill_edges(world);
+        }
     }
 
     game_model_destroy(world->parent_model);
     free(world->parent_model);
     world->parent_model = NULL;
+}
+
+// replay the live-side effects world_load_section skipped: scene registration of every built model, then minimap
+// texture upload and blit; run before world_gl_buffer_world_models
+void world_load_section_commit(World *world) {
+    if (!world->defer_scene_adds) {
+        return;
+    }
+
+    world->defer_scene_adds = 0;
+
+#if defined(RENDER_GL) || defined(RENDER_3DS_GL)
+    for (int i = 0; i < world->gl_world_models_offset; i++) {
+        scene_add_model(world->scene, world->gl_world_models_buffer[i]);
+    }
+#endif
+
+#ifdef RENDER_GL
+    // the load only repainted the minimap rows of the dynamic texture
+    surface_gl_update_dynamic_texture_rows(world->surface, SLEEP_HEIGHT,
+                                           MINIMAP_SPRITE_WIDTH);
+#endif
+
+    surface_draw_sprite_reversed(world->surface, world->base_media_sprite - 1,
+                                 0, 0, MINIMAP_SPRITE_WIDTH,
+                                 MINIMAP_SPRITE_WIDTH);
 }
 
 static void world_vertex_shadow(World *world, int vertex_x, int vertex_z,
@@ -2524,12 +2754,72 @@ void world_gl_create_world_models_buffer(World *world, int max_models) {
     world->gl_world_models_offset = 0;
 }
 
+// merge-class key for buffer-layout grouping: sidedness classification, transparency, lighting uniforms
+static int world_gl_model_class_less(const GameModel *a, const GameModel *b) {
+    int ka = (a->gl_all_back_only << 1) | a->gl_all_front_only;
+    int kb = (b->gl_all_back_only << 1) | b->gl_all_front_only;
+
+    if (ka != kb) {
+        return ka < kb;
+    }
+    if (a->transparent != b->transparent) {
+        return a->transparent < b->transparent;
+    }
+    if (a->unlit != b->unlit) {
+        return a->unlit < b->unlit;
+    }
+    if (a->light_ambience != b->light_ambience) {
+        return a->light_ambience < b->light_ambience;
+    }
+    if (a->light_diffuse != b->light_diffuse) {
+        return a->light_diffuse < b->light_diffuse;
+    }
+    return 0;
+}
+
+// populate model buffers for the built world models into an explicit target; keeps the model list
+void world_gl_buffer_world_models_to(World *world,
+                                     gl_vertex_buffer ***buffers,
+                                     int *buffers_length, int deferred) {
+    int count = world->gl_world_models_offset;
+
+    // sort a scratch copy by the merge key so equal-class models pack contiguously; only the EBO/VBO layout order
+    // changes
+    GameModel **sorted = malloc(sizeof(GameModel *) * (count > 0 ? count : 1));
+
+    if (sorted != NULL) {
+        for (int i = 0; i < count; i++) {
+            sorted[i] = world->gl_world_models_buffer[i];
+            game_model_gl_classify(sorted[i], NULL);
+        }
+
+        for (int i = 1; i < count; i++) {
+            GameModel *m = sorted[i];
+            int j = i - 1;
+
+            while (j >= 0 && world_gl_model_class_less(m, sorted[j])) {
+                sorted[j + 1] = sorted[j];
+                j--;
+            }
+
+            sorted[j + 1] = m;
+        }
+    }
+
+    // keep the mirrors; world_gl_update_terrain_buffers patches lighting bytes into them
+    game_model_gl_buffer_models(buffers, buffers_length,
+                                sorted != NULL ? sorted
+                                               : world->gl_world_models_buffer,
+                                count, 1, deferred);
+
+    free(sorted);
+}
+
 /* create and populate the initial VBO of landscape-related models */
 void world_gl_buffer_world_models(World *world) {
-    game_model_gl_buffer_models(&world->scene->gl_terrain_buffers,
-                                &world->scene->gl_terrain_buffer_length,
-                                world->gl_world_models_buffer,
-                                world->gl_world_models_offset);
+    world_gl_buffer_world_models_to(world, &world->scene->gl_terrain_buffers,
+                                    &world->scene->gl_terrain_buffer_length,
+                                    0);
 
     free(world->gl_world_models_buffer);
 
@@ -2537,8 +2827,9 @@ void world_gl_buffer_world_models(World *world) {
     world->gl_world_models_offset = 0;
 }
 
-/* update the terrain model VBOs after ambience changes */
-void world_gl_update_terrain_buffers(World *world) {
+// patch the terrain buffers' CPU mirrors with fresh lighting; writes only the kept mirrors + dirty ranges, never GL;
+// world_gl_update_terrain_flush uploads
+void world_gl_update_terrain_patch(World *world) {
     for (int i = 0; i < TERRAIN_COUNT; i++) {
         GameModel *game_model = world->terrain_models[i];
 
@@ -2546,7 +2837,12 @@ void world_gl_update_terrain_buffers(World *world) {
             continue;
         }
 
-        vertex_buffer_gl_bind(game_model->gl_buffer);
+#ifdef RENDER_GL
+        // patching needs the buffer's full kept mirror
+        if (game_model->gl_buffer->vbo_mirror == NULL) {
+            continue;
+        }
+#endif
 
         int vertex_offset = game_model->gl_vbo_offset;
 
@@ -2562,26 +2858,43 @@ void world_gl_update_terrain_buffers(World *world) {
                     game_model->vertex_intensity[vertex_index] +
                     game_model->vertex_ambience[vertex_index];
 
-                float lighting[] = {(float)(face_intensity),
-                                    (float)(vertex_intensity)};
+                // packed int16 lighting { face_intensity, vertex_intensity }, matching gl_model_vertex.lighting; S16
+                // at offset 20 in the 40-byte vertex
+                int16_t lighting[] = {(int16_t)(face_intensity),
+                                      (int16_t)(vertex_intensity)};
 
 #ifdef RENDER_GL
-                // TODO use offsetof
-                glBufferSubData(
-                    GL_ARRAY_BUFFER,
+                // staged into the kept mirror; flushed once below
+                vertex_buffer_gl_write_vbo(
+                    game_model->gl_buffer,
                     ((vertex_offset + k) * sizeof(gl_model_vertex)) +
-                        (sizeof(GLfloat) * 7),
-                    (sizeof(GLfloat) * 2), (void *)&lighting);
+                        offsetof(gl_model_vertex, lighting),
+                    (sizeof(int16_t) * 2), (void *)&lighting);
 #elif defined(RENDER_3DS_GL)
                 memcpy(game_model->gl_buffer->vbo +
                            ((vertex_offset + k) * sizeof(gl_model_vertex)) +
-                           (7 * sizeof(float)),
-                       (void *)&lighting, 2 * sizeof(float));
+                           offsetof(gl_model_vertex, lighting),
+                       (void *)&lighting, 2 * sizeof(int16_t));
 #endif
             }
 
             vertex_offset += face_vertex_count;
         }
     }
+}
+
+// upload the mirror ranges world_gl_update_terrain_patch dirtied; render thread only
+void world_gl_update_terrain_flush(World *world) {
+#ifdef RENDER_GL
+    for (int i = 0; i < world->scene->gl_terrain_buffer_length; i++) {
+        vertex_buffer_gl_flush(world->scene->gl_terrain_buffers[i], 1);
+    }
+#endif
+}
+
+// update the terrain model VBOs after ambience changes (CPU patch + upload)
+void world_gl_update_terrain_buffers(World *world) {
+    world_gl_update_terrain_patch(world);
+    world_gl_update_terrain_flush(world);
 }
 #endif

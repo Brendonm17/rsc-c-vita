@@ -106,7 +106,25 @@ void bignum_from_string(struct bn *n, char *str, int nbytes) {
     /* MSB ~= most significant byte / block ? :) */
     while (i >= 0) {
         tmp = 0;
-        sscanf(&str[i], SSCANF_FORMAT_STR, &tmp);
+
+        // parse hex by hand: newlib sscanf lacks %hhx
+        for (int k = 0; k < (int)(2 * WORD_SIZE); k++) {
+            char c = str[i + k];
+            int v;
+
+            if (c >= '0' && c <= '9') {
+                v = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                v = c - 'a' + 10;
+            } else if (c >= 'A' && c <= 'F') {
+                v = c - 'A' + 10;
+            } else {
+                v = 0;
+            }
+
+            tmp = (DTYPE)((tmp << 4) | v);
+        }
+
         n->array[j] = tmp;
         i -= (2 *
               WORD_SIZE); /* step WORD_SIZE hex-byte(s) back in the string. */

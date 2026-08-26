@@ -4,6 +4,11 @@
 #include "locolour.h"
 #endif
 
+#if defined(__vita__)
+#include <ctype.h> // tolower() for the scimitar-cursor name lookup
+#include "game-data.h" // scimitar item sprite
+#endif
+
 int an_int_346 = 0;
 int an_int_347 = 0;
 int an_int_348 = 0;
@@ -179,6 +184,103 @@ void surface_reset_bounds(Surface *surface) {
     surface->bounds_max_y = surface->height;
 }
 
+#ifdef __vita__
+// Case-insensitive substring match (newlib has no strcasestr).
+static int vita_str_contains_ci(const char *haystack, const char *needle) {
+    size_t nlen = strlen(needle);
+
+    for (; *haystack != '\0'; haystack++) {
+        size_t i = 0;
+
+        while (i < nlen && haystack[i] != '\0' &&
+               tolower((unsigned char)haystack[i]) ==
+                   tolower((unsigned char)needle[i])) {
+            i++;
+        }
+
+        if (i == nlen) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// cursor styles: index 0 is the crosshair, 1+ are weapon item sprites
+static const char *vita_cursor_names[] = {
+    "Crosshair",  "Scimitar", "Long sword", "Short sword",
+    "Battle axe", "Dagger",   "Mace",       "Staff",
+};
+
+#define VITA_CURSOR_COUNT                                                      \
+    ((int)(sizeof(vita_cursor_names) / sizeof(vita_cursor_names[0])))
+
+int vita_cursor_style_count(void) { return VITA_CURSOR_COUNT; }
+
+const char *vita_cursor_style_name(int style) {
+    if (style < 0 || style >= VITA_CURSOR_COUNT) {
+        return vita_cursor_names[0];
+    }
+
+    return vita_cursor_names[style];
+}
+
+// item id containing needle, cached; -1 until game data loads
+static int vita_cursor_item_id(const char *needle) {
+    static const char *cached_needle = NULL;
+    static int cached_id = -1;
+
+    if (needle == cached_needle && cached_id >= 0) {
+        return cached_id;
+    }
+
+    cached_needle = needle;
+    cached_id = -1;
+
+    for (int i = 0; i < game_data.item_count; i++) {
+        if (game_data.items[i].name != NULL &&
+            vita_str_contains_ci(game_data.items[i].name, needle)) {
+            cached_id = i;
+            break;
+        }
+    }
+
+    return cached_id;
+}
+
+// virtual-mouse cursor: crosshair or the selected weapon sprite, flipped
+void vita_draw_cursor(Surface *surface, int x, int y) {
+    int arm = 8;
+    int style = surface->mud->options->vita_cursor_style;
+
+    surface_reset_bounds(surface);
+
+    if (style > 0 && style < VITA_CURSOR_COUNT) {
+        int item_id = vita_cursor_item_id(vita_cursor_names[style]);
+
+        if (item_id >= 0) {
+            // item sprite flipped horizontally, offset for the cursor hotspot
+            surface_draw_sprite_transform_mask(
+                surface, x - 6, y - 6, 27, 26,
+                surface->mud->sprite_item + game_data.items[item_id].sprite,
+                game_data.items[item_id].mask, 0, 0, 1);
+            return;
+        }
+        // else fall through to the crosshair (item data not loaded yet)
+    }
+
+    // black outline for contrast on any background
+    surface_draw_line_horizontal(surface, x - arm - 1, y - 1, 2 * arm + 3, 0);
+    surface_draw_line_horizontal(surface, x - arm - 1, y + 1, 2 * arm + 3, 0);
+    surface_draw_line_vertical(surface, x - 1, y - arm - 1, 2 * arm + 3, 0);
+    surface_draw_line_vertical(surface, x + 1, y - arm - 1, 2 * arm + 3, 0);
+
+    // yellow crosshair
+    surface_draw_line_horizontal(surface, x - arm, y, 2 * arm + 1, 0xffff00);
+    surface_draw_line_vertical(surface, x, y - arm, 2 * arm + 1, 0xffff00);
+}
+#endif
+
 void surface_draw(Surface *surface) {
     mudclient *mud = surface->mud;
 
@@ -251,6 +353,38 @@ void surface_draw(Surface *surface) {
 #ifdef SDL12
     SDL_BlitSurface(mud->pixel_surface, NULL, mud->screen, NULL);
     SDL_Flip(mud->screen);
+#elif defined(__vita__)
+    if (mud->vita_renderer != NULL && mud->vita_texture != NULL) {
+        vita_draw_cursor(surface, mud->mouse_x, mud->mouse_y);
+
+        // forces alpha opaque; vita treats alpha 0 as transparent
+        {
+            uint32_t *px = (uint32_t *)mud->pixel_surface->pixels;
+            int count = (mud->pixel_surface->pitch / 4) * mud->pixel_surface->h;
+            for (int i = 0; i < count; i++) {
+                px[i] |= 0xff000000;
+            }
+        }
+
+        SDL_UpdateTexture(mud->vita_texture, NULL, mud->pixel_surface->pixels,
+                          mud->pixel_surface->pitch);
+
+        // letterboxes the game into the panel, preserving aspect ratio
+        float view_w = 960.0f;
+        float view_h = 544.0f;
+        float scale_x = view_w / mud->game_width;
+        float scale_y = view_h / mud->game_height;
+        float scale = scale_x < scale_y ? scale_x : scale_y;
+        int dw = (int)(mud->game_width * scale);
+        int dh = (int)(mud->game_height * scale);
+        SDL_Rect dst = {(int)((view_w - dw) / 2.0f), (int)((view_h - dh) / 2.0f),
+                        dw, dh};
+
+        SDL_SetRenderDrawColor(mud->vita_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(mud->vita_renderer);
+        SDL_RenderCopy(mud->vita_renderer, mud->vita_texture, NULL, &dst);
+        SDL_RenderPresent(mud->vita_renderer);
+    }
 #else
     if (mud->window != NULL) {
         SDL_BlitScaled(mud->pixel_surface, NULL, mud->screen, NULL);
@@ -258,6 +392,13 @@ void surface_draw(Surface *surface) {
         SDL_UpdateWindowSurface(mud->window);
     }
 #endif
+#endif
+
+#if defined(__vita__) && defined(RENDER_GL)
+    // draws the virtual cursor into the gl 2d batch, skipped during capture
+    if (!surface->gl_capture_active) {
+        vita_draw_cursor(surface, mud->mouse_x, mud->mouse_y);
+    }
 #endif
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
@@ -953,10 +1094,13 @@ void surface_read_sleep_word(Surface *surface, int sprite_id,
     int packet_offset = 1;
     int pixel_index = 0;
 
+    // clamps run-length writes to the buffer end to prevent overflow
+    const int pixel_max = SLEEP_WIDTH * SLEEP_HEIGHT;
+
     for (pixel_index = 0; pixel_index < SLEEP_WIDTH;) {
         int length = sprite_data[packet_offset++] & 0xff;
 
-        for (int i = 0; i < length; i++) {
+        for (int i = 0; i < length && pixel_index < pixel_max; i++) {
             pixels[pixel_index++] = colour;
         }
 
@@ -968,17 +1112,19 @@ void surface_read_sleep_word(Surface *surface, int sprite_id,
         for (int x = 0; x < SLEEP_WIDTH;) {
             int length = sprite_data[packet_offset++] & 0xff;
 
-            for (int i = 0; i < length; i++) {
+            for (int i = 0; i < length && pixel_index < pixel_max; i++) {
                 pixels[pixel_index] = pixels[pixel_index - SLEEP_WIDTH];
                 pixel_index++;
                 x++;
             }
 
-            if (x < SLEEP_WIDTH) {
+            if (x < SLEEP_WIDTH && pixel_index < pixel_max) {
                 pixels[pixel_index] = WHITE - pixels[pixel_index - SLEEP_WIDTH];
 
                 pixel_index++;
                 x++;
+            } else if (pixel_index >= pixel_max) {
+                break; // buffer full; stop consuming wire data
             }
         }
     }
@@ -3085,8 +3231,22 @@ void surface_draw_paragraph(Surface *surface, const char *text, int x, int y,
     size_t end = 0;
     size_t text_length = strlen(text);
 
+    // fix_overhead_chat (config 41): a wrapped line re-starts in the last @col@ code seen before the wrap
+    int carry_enabled = 0;
+    char carry_code[6] = {0};
+    char latest_code[6] = {0};
+
+#ifndef REVISION_177
+    carry_enabled = surface->mud != NULL && surface->mud->protocol_custom &&
+                    surface->mud->orsc.want_fixed_overhead_chat;
+#endif
+
     for (size_t i = 0; i < text_length; i++) {
         if (text[i] == '@' && i + 4 < text_length && text[i + 4] == '@') {
+            if (carry_enabled) {
+                memcpy(latest_code, text + i, 5);
+                latest_code[5] = '\0';
+            }
             i += 4;
         } else if (text[i] == '~' && i + 4 < text_length &&
                    text[i + 4] == '~') {
@@ -3108,10 +3268,17 @@ void surface_draw_paragraph(Surface *surface, const char *text, int x, int y,
                 end = i;
             }
 
-            char sliced[(end - start) + 1];
-            memset(sliced, '\0', (end - start) + 1);
-            strncpy(sliced, text + start, end - start);
+            char sliced[(end - start) + 6];
+            memset(sliced, '\0', (end - start) + 6);
+
+            if (carry_enabled && start > 0 && carry_code[0] != '\0') {
+                strcpy(sliced, carry_code);
+            }
+
+            strncat(sliced, text + start, end - start);
             surface_draw_string_centre(surface, sliced, x, y, font, colour);
+
+            memcpy(carry_code, latest_code, sizeof(carry_code));
 
             width = 0;
             start = i = end + 1;
@@ -3121,9 +3288,14 @@ void surface_draw_paragraph(Surface *surface, const char *text, int x, int y,
     }
 
     if (width > 0) {
-        char sliced[(text_length - start) + 1];
-        memset(sliced, '\0', (text_length - start) + 1);
-        strncpy(sliced, text + start, text_length - start);
+        char sliced[(text_length - start) + 6];
+        memset(sliced, '\0', (text_length - start) + 6);
+
+        if (carry_enabled && start > 0 && carry_code[0] != '\0') {
+            strcpy(sliced, carry_code);
+        }
+
+        strncat(sliced, text + start, text_length - start);
         surface_draw_string_centre(surface, sliced, x, y, font, colour);
     }
 }

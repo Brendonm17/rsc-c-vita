@@ -25,8 +25,20 @@ texture-pack/node_modules
 *.npdm
 *.nso
 *.nsp
+# Vita
+*.velf
+eboot.bin
+param.sfo
+*.vpk
 *.bak
 org.scape2003.mudclient/.gradle/
 org.scape2003.mudclient/app/build/
 .DS_Store
 .vscode
+
+# vita build artifacts
+*.glo
+*.o
+*.psp2dmp
+sp/bundle-cache.bc
+sp/saves/

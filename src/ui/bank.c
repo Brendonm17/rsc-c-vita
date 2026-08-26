@@ -3,6 +3,41 @@
 static void mudclient_draw_bank_page(mudclient *mud, int x, int y, int page,
                                      int width);
 
+#ifndef REVISION_177
+// the 27 authentic certificate items, the only ids the Uncert+Deposit rows apply to
+static const short bank_cert_item_ids[] = {
+    517,  518,  519,  520,  521,          // ores
+    528,  529,  530,  531,  532,          // bars
+    533,  534,  535,  536,  628,  629, 630, 631, // fish
+    711,  712,  713,                      // logs
+    1270, 1271, 1272, 1273, 1274, 1275};  // misc
+
+int mudclient_bank_item_is_cert(int item_id) {
+    for (size_t i = 0;
+         i < sizeof(bank_cert_item_ids) / sizeof(*bank_cert_item_ids); i++) {
+        if (bank_cert_item_ids[i] == item_id) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// sendCertMode: 199[0][mode], sent only when the mode changed
+static void mudclient_bank_send_cert_mode(mudclient *mud, int mode) {
+    if (mud->orsc_bank_cert_mode == mode) {
+        return;
+    }
+
+    packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+    packet_stream_put_byte(mud->packet_stream, 0);
+    packet_stream_put_byte(mud->packet_stream, mode ? 1 : 0);
+    packet_stream_send_packet(mud->packet_stream);
+
+    mud->orsc_bank_cert_mode = mode;
+}
+#endif
+
 /* handle withdrawing or depositing */
 void mudclient_bank_transaction(mudclient *mud, int item_id, int amount,
                                 int opcode) {
@@ -17,29 +52,53 @@ void mudclient_bank_transaction(mudclient *mud, int item_id, int amount,
         }
     }
 
-    /* TODO should probably queue if over the packet buffer length */
-    int total_packets = (int)ceil((float)amount / 32767.0f);
-
-    for (int i = 0; i < total_packets; i++) {
-        packet_stream_new_packet(mud->packet_stream, opcode);
-        packet_stream_put_short(mud->packet_stream, item_id);
-
-        int send_amount = amount;
-
-        if (send_amount > 32767) {
-            send_amount = 32767;
-            amount -= 32767;
+#ifndef REVISION_177
+    if (mud->protocol_custom) {
+        // every deposit leads with the cert mode: uncert rows arm 1, plain deposits re-arm 0; withdraws never touch it
+        if (!is_withdraw && mud->orsc.want_cert_deposit) {
+            mudclient_bank_send_cert_mode(mud, mud->bank_offer_uncert);
         }
 
-        packet_stream_put_short(mud->packet_stream, send_amount);
+        // custom bank packet: u16 item id, i32 amount, u8 noted
+        packet_stream_new_packet(mud->packet_stream, opcode);
+        packet_stream_put_short(mud->packet_stream, item_id);
+        packet_stream_put_int(mud->packet_stream, amount);
 
-#ifndef REVISION_177
-        packet_stream_put_int(mud->packet_stream, is_withdraw
-                                                      ? BANK_MAGIC_WITHDRAW
-                                                      : BANK_MAGIC_DEPOSIT);
-#endif
+        if (is_withdraw && mud->orsc.want_bank_notes) {
+            packet_stream_put_byte(mud->packet_stream,
+                                   mud->bank_swap_note_mode ? 1 : 0);
+        }
 
         packet_stream_send_packet(mud->packet_stream);
+    } else
+#endif
+    {
+        // no queueing if the split exceeds the packet buffer
+        int total_packets = (int)ceil((float)amount / 32767.0f);
+
+        for (int i = 0; i < total_packets; i++) {
+            packet_stream_new_packet(mud->packet_stream, opcode);
+            packet_stream_put_short(mud->packet_stream, item_id);
+
+            int send_amount = amount;
+
+            if (send_amount > 32767) {
+                send_amount = 32767;
+                amount -= 32767;
+            }
+
+            packet_stream_put_short(mud->packet_stream, send_amount);
+
+#ifndef REVISION_177
+            if (!mud->protocol177) { // magic ints absent in the 177 dialect
+                packet_stream_put_int(mud->packet_stream,
+                                      is_withdraw ? BANK_MAGIC_WITHDRAW
+                                                  : BANK_MAGIC_DEPOSIT);
+            }
+#endif
+
+            packet_stream_send_packet(mud->packet_stream);
+        }
     }
 
     /* select the item if it isn't already */
@@ -84,6 +143,36 @@ void mudclient_bank_transaction(mudclient *mud, int item_id, int amount,
         int items_per_page = mud->bank_visible_rows * visible_columns;
         mud->bank_active_page = mud->bank_selected_item_slot / items_per_page;
     }
+}
+
+// deposit the entire inventory or worn equipment in one packet
+void mudclient_bank_deposit_all(mudclient *mud, int opcode) {
+    packet_stream_new_packet(mud->packet_stream, opcode);
+    packet_stream_send_packet(mud->packet_stream);
+}
+
+// deposit-all requires custom banks; equipment also needs the tab
+int mudclient_bank_can_deposit_all(mudclient *mud, int from_equipment) {
+#ifdef WITH_SINGLEPLAYER
+    if (mud->singleplayer) {
+        return 1;
+    }
+#endif
+
+#ifndef REVISION_177
+    if (!mud->protocol_custom || !mud->orsc.want_custom_banks) {
+        return 0;
+    }
+
+    if (from_equipment && !mud->orsc.want_equipment_tab) {
+        return 0;
+    }
+
+    return 1;
+#else
+    (void)from_equipment;
+    return 0;
+#endif
 }
 
 /* draw the page numbers in the title bar */
@@ -635,6 +724,86 @@ void mudclient_draw_bank(mudclient *mud) {
                             mud, "Withdraw", MENU_BANK_WITHDRAW,
                             selected_item_id, item_amount, formatted_item_name,
                             mud->bank_last_withdraw_offer);
+
+#ifndef REVISION_177
+                        // equip a wearable item directly from the bank
+                        if (mud->protocol_custom &&
+                            mud->orsc.want_equipment_tab &&
+                            game_data.items[selected_item_id].wearable != 0) {
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .action_text,
+                                   "Equip");
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .target_text,
+                                   formatted_item_name);
+                            mud->menu_items[mud->menu_items_count].type =
+                                MENU_BANK_EQUIP;
+                            mud->menu_items[mud->menu_items_count].index =
+                                slot_index;
+                            mud->menu_items_count++;
+                        }
+
+                        // reordering disabled while a search filter is active
+                        int organize_ok = mud->protocol_custom &&
+                                          mud->orsc.want_custom_banks &&
+                                          !(mud->options->bank_search &&
+                                            strlen(mud->input_pm_current) > 0);
+
+                        if (organize_ok && mud->bank_organize_slot < 0) {
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .action_text,
+                                   "Swap");
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .target_text,
+                                   formatted_item_name);
+                            mud->menu_items[mud->menu_items_count].type =
+                                MENU_BANK_ORGANIZE_SWAP;
+                            mud->menu_items[mud->menu_items_count].index =
+                                slot_index;
+                            mud->menu_items_count++;
+
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .action_text,
+                                   "Insert");
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .target_text,
+                                   formatted_item_name);
+                            mud->menu_items[mud->menu_items_count].type =
+                                MENU_BANK_ORGANIZE_INSERT;
+                            mud->menu_items[mud->menu_items_count].index =
+                                slot_index;
+                            mud->menu_items_count++;
+                        } else if (organize_ok &&
+                                   mud->bank_organize_slot != slot_index) {
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .action_text,
+                                   mud->bank_organize_insert ? "Insert before"
+                                                             : "Swap with");
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .target_text,
+                                   formatted_item_name);
+                            mud->menu_items[mud->menu_items_count].type =
+                                mud->bank_organize_insert
+                                    ? MENU_BANK_ORGANIZE_INSERT
+                                    : MENU_BANK_ORGANIZE_SWAP;
+                            mud->menu_items[mud->menu_items_count].index =
+                                slot_index;
+                            mud->menu_items_count++;
+                        } else if (organize_ok) {
+                            // release on the held slot to cancel the move
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .action_text,
+                                   "Cancel move");
+                            strcpy(mud->menu_items[mud->menu_items_count]
+                                       .target_text,
+                                   formatted_item_name);
+                            mud->menu_items[mud->menu_items_count].type =
+                                MENU_BANK_ORGANIZE_SWAP;
+                            mud->menu_items[mud->menu_items_count].index =
+                                slot_index;
+                            mud->menu_items_count++;
+                        }
+#endif
                     }
                 }
 
@@ -705,11 +874,52 @@ void mudclient_draw_bank(mudclient *mud) {
                        mouse_x <= (page_offset_x + page_width * 4) &&
                        mouse_y <= 12) {
                 mud->bank_active_page = 3;
-            } else {
+            } else if (mouse_y <= 12 && mudclient_bank_can_deposit_all(mud, 0) &&
+                       (bank_width - 160) > page_offset_x &&
+                       mouse_x >= (bank_width - 160) &&
+                       mouse_x < (bank_width - 92)) {
+                // deposit-all button; only shown where the world allows it
+                mudclient_bank_deposit_all(mud,
+                                           CLIENT_BANK_DEPOSIT_ALL_INVENTORY);
+            }
+#ifndef REVISION_177
+            else if (mud->protocol_custom && mud->orsc.want_bank_presets &&
+                     mouse_y <= 12 && mouse_x >= (bank_width - 274) &&
+                     mouse_x < (bank_width - 168)) {
+                // preset hit zones, right to left: presets, ld1, ld2
+                if (mouse_x >= (bank_width - 194) &&
+                    (bank_width - 194) > page_offset_x) {
+                    packet_stream_new_packet(mud->packet_stream,
+                                             CLIENT_BANK_LOAD_PRESET);
+                    packet_stream_put_short(mud->packet_stream, 1);
+                    packet_stream_send_packet(mud->packet_stream);
+                } else if (mouse_x >= (bank_width - 224) &&
+                           mouse_x < (bank_width - 198) &&
+                           (bank_width - 224) > page_offset_x) {
+                    packet_stream_new_packet(mud->packet_stream,
+                                             CLIENT_BANK_LOAD_PRESET);
+                    packet_stream_put_short(mud->packet_stream, 0);
+                    packet_stream_send_packet(mud->packet_stream);
+                } else if (mouse_x < (bank_width - 228) &&
+                           (bank_width - 274) > page_offset_x) {
+                    mud->show_dialog_bank_preset = 1;
+                    mud->bank_preset_selected_slot = 0;
+                }
+            } else if (mud->protocol_custom && mud->orsc.want_bank_notes &&
+                       mouse_y <= 12 && mouse_x >= (bank_width - 318) &&
+                       mouse_x < (bank_width - 284) &&
+                       (bank_width - 318) > page_offset_x) {
+                // toggles withdraw mode between item and note, client-side only
+                mud->bank_swap_note_mode = !mud->bank_swap_note_mode;
+            }
+#endif
+            else {
                 packet_stream_new_packet(mud->packet_stream, CLIENT_BANK_CLOSE);
                 packet_stream_send_packet(mud->packet_stream);
                 mud->show_dialog_bank = 0;
                 mud->show_dialog_offer_x = 0;
+                mud->bank_organize_slot = -1;
+                mud->bank_swap_note_mode = 0; // reset to item mode
                 return;
             }
         }
@@ -837,6 +1047,77 @@ void mudclient_draw_bank(mudclient *mud) {
     surface_draw_string_right(mud->surface, "Close window",
                               ui_x + bank_width - 2, ui_y + 10, FONT_BOLD_12,
                               text_colour);
+
+    // deposit-all button; hidden if the title bar has no room
+    int deposit_inv_right = ui_x + bank_width - 92;
+    int deposit_inv_width = 68;
+    int deposit_inv_x = deposit_inv_right - deposit_inv_width;
+    int show_deposit_inv = deposit_inv_x > ui_x + page_offset_x &&
+                           mudclient_bank_can_deposit_all(mud, 0);
+
+    if (show_deposit_inv) {
+        int deposit_hot = mud->mouse_x >= deposit_inv_x &&
+                          mud->mouse_x < deposit_inv_right &&
+                          mud->mouse_y >= ui_y && mud->mouse_y < ui_y + 12;
+
+        surface_draw_string_right(mud->surface, "Deposit inv", deposit_inv_right,
+                                  ui_y + 10, FONT_BOLD_12,
+                                  deposit_hot ? RED : WHITE);
+    }
+
+#ifndef REVISION_177
+    // preset load buttons; saving happens in the preset viewer
+    if (mud->protocol_custom && mud->orsc.want_bank_presets) {
+        static const char *preset_labels[2] = {"Ld1", "Ld2"};
+        int preset_right = deposit_inv_x - 8;
+
+        for (int i = 1; i >= 0; i--) {
+            int zone_right = preset_right - (1 - i) * 30;
+            int zone_left = zone_right - 26;
+
+            if (zone_left <= ui_x + page_offset_x) {
+                break;
+            }
+
+            int preset_hot = mud->mouse_x >= zone_left &&
+                             mud->mouse_x < zone_right &&
+                             mud->mouse_y >= ui_y && mud->mouse_y < ui_y + 12;
+
+            surface_draw_string_right(mud->surface, preset_labels[i],
+                                      zone_right, ui_y + 10, FONT_BOLD_12,
+                                      preset_hot ? RED : WHITE);
+        }
+
+        int viewer_right = preset_right - 2 * 30;
+        int viewer_left = viewer_right - 46;
+
+        if (viewer_left > ui_x + page_offset_x) {
+            int viewer_hot = mud->mouse_x >= viewer_left &&
+                             mud->mouse_x < viewer_right &&
+                             mud->mouse_y >= ui_y && mud->mouse_y < ui_y + 12;
+
+            surface_draw_string_right(mud->surface, "Presets", viewer_right,
+                                      ui_y + 10, FONT_BOLD_12,
+                                      viewer_hot ? RED : WHITE);
+        }
+    }
+
+    // shows current withdraw mode: item or note
+    if (mud->protocol_custom && mud->orsc.want_bank_notes) {
+        int note_right = ui_x + bank_width - 284;
+        int note_left = note_right - 34;
+
+        if (note_left > ui_x + page_offset_x) {
+            int note_hot = mud->mouse_x >= note_left &&
+                           mud->mouse_x < note_right && mud->mouse_y >= ui_y &&
+                           mud->mouse_y < ui_y + 12;
+
+            surface_draw_string_right(
+                mud->surface, mud->bank_swap_note_mode ? "Note" : "Item",
+                note_right, ui_y + 10, FONT_BOLD_12, note_hot ? RED : WHITE);
+        }
+    }
+#endif
 
     if (!is_compact) {
         surface_draw_string(mud->surface, "Number in bank in green", ui_x + 7,

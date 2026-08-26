@@ -40,6 +40,20 @@
 #define STRING_GR2 0x80ff00
 #define STRING_GR3 0x40ff00
 
+#define STRING_BL1 0x4040ff
+#define STRING_BL2 0x0040ff
+#define STRING_BL3 0x4000ff
+#define STRING_DGR 0x00c000
+#define STRING_DBL 0x0000c0
+#define STRING_DCY 0x00c0c0 // Owner
+#define STRING_DOR 0xc06020
+#define STRING_SUB 0xeedddd
+#define STRING_EVE 0x4d33bd // Event staff
+#define STRING_SIL 0xc0c0c0
+#define STRING_PRE 0x44eadf
+#define STRING_CLA 0x7cadda // clan tag colour
+#define STRING_PIN 0xff8ed9
+
 /* colours for message tab buttons on bottom */
 #define MESSAGE_TAB_ORANGE 0xffc832
 #define MESSAGE_TAB_PURPLE 0xc8c8ff

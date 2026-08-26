@@ -1,0 +1,78 @@
+// game-model (3D world) vertex shader, Cg for psp2.
+// Attribute order matches rsc-c locations 0..6.
+#define VERTEX_SCALE 100.0f
+#define USE_GOURAUD 32767.0f
+#define RAMP_SIZE 256.0f
+
+uniform float scroll_texture;
+uniform int fog_distance;
+uniform float4x4 model;
+uniform float4x4 projection_view_model;
+uniform int unlit;
+uniform float light_ambience;
+uniform float3 light_direction;
+uniform float light_diffuse;
+uniform int cull_front;
+
+void main(
+    float3 position,
+    float4 normal,
+    float2 lighting,
+    float3 front_colour,
+    float2 front_texture_position,
+    float3 back_colour,
+    float2 back_texture_position,
+    // colour/ramp varyings in half; texcoords and internal math stay float
+    half3 out vertex_colour : TEXCOORD0,
+    float2 out vertex_texture_position : TEXCOORD1,
+    half  out vertex_light_lut : TEXCOORD2,
+    half  out vertex_tex_lut : TEXCOORD3,
+    float4 out gl_Position : POSITION)
+{
+    gl_Position = mul(float4(position, 1.0f), projection_view_model);
+
+    float face_intensity = lighting.x;
+    float vertex_intensity = lighting.y;
+
+    float intensity = lighting.y;
+    float gradient_index = light_ambience;
+
+    if (unlit != 0) {
+        intensity = (face_intensity == USE_GOURAUD) ? vertex_intensity : face_intensity;
+    } else {
+        // GLSL: vec3(model * vec4(normal.xyz, 0.0))
+        float3 model_normal = mul(float4(normal.xyz, 0.0f), model).xyz;
+        intensity = dot(light_direction, model_normal) / (light_diffuse * normal.w);
+    }
+
+    if (cull_front != 0) {
+        gradient_index += intensity;
+        vertex_colour = back_colour;
+        vertex_texture_position = back_texture_position;
+    } else {
+        gradient_index -= intensity;
+        vertex_colour = front_colour;
+        vertex_texture_position = front_texture_position;
+    }
+
+    if (gl_Position.z > ((float)fog_distance / VERTEX_SCALE)) {
+        gradient_index += gl_Position.z * VERTEX_SCALE - (float)fog_distance;
+    }
+
+    gradient_index = max(0.0f, min(gradient_index, RAMP_SIZE - 1.0f));
+
+    // per-vertex lighting ramps, Gouraud-interpolated. gi = 255 - gradient_index
+    int gi = 255 - (int)gradient_index;
+    vertex_light_lut = (float)(gi * gi) / 65536.0f;       // flat-colour ramp
+    int tgi = gi / 16;                                    // 0..15
+    int tx = tgi / 4;                                     // 0..3
+    int ty = tgi - tx * 4;                                // 0..3
+    float p = (float)(1 << tx);                           // 2^x = 1,2,4,8
+    vertex_tex_lut = ((19.0f * p) + (4.0f * p * (float)ty)) / 255.0f;  // textured ramp
+
+    if (vertex_texture_position.x < 0.0f) {
+        vertex_texture_position.x *= -1.0f;
+        vertex_texture_position.y *= -1.0f;
+        vertex_texture_position.y += scroll_texture;
+    }
+}

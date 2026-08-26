@@ -149,7 +149,7 @@ void mudclient_draw_ui_tab_minimap(mudclient *mud, int no_menus) {
 
         for (int j = 0; j < mud->friend_list_count; j++) {
             if (player->encoded_username == mud->friend_list[j] &&
-                mud->friend_list_online[j] == FRIEND_ONLINE) {
+                mud->friend_list_online[j] == MUD_FRIEND_ONLINE(mud)) {
                 player_colour = GREEN;
                 break;
             }

@@ -67,6 +67,8 @@ struct Panel {
     FontStyle *control_font_style; /* also used for sprite IDs */
     char **control_text;
     char ***control_list_entries;
+    // optional per-entry packed crown int for text lists, drawn before the entry text
+    int **control_list_entry_crowns;
     int mouse_x;
     int mouse_y;
     int mouse_last_button_down;
@@ -126,6 +128,8 @@ int panel_is_activated(Panel *panel, int control);
 void panel_clear_list(Panel *panel, int control);
 void panel_reset_list(Panel *panel, int control);
 void panel_add_list_entry(Panel *panel, int control, int index, char *text);
+void panel_add_list_entry_wrapped_crown(Panel *panel, int control, char *text,
+                                        int flash, int crown);
 void panel_add_list_entry_wrapped(Panel *panel, int control, char *text,
                                   int flash);
 void panel_update_text(Panel *panel, int control, char *text);

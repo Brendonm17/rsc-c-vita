@@ -21,6 +21,11 @@
 #define APPEARANCE_CHARACTER_WIDTH 64
 #define APPEARANCE_CHARACTER_HEIGHT 102
 
+// creation selectors: order is the wire index the server expects
+#define APPEARANCE_IRONMAN_MODE_COUNT 4
+#define APPEARANCE_CLASS_COUNT 6
+#define APPEARANCE_ONE_XP_COUNT 2
+
 void mudclient_create_appearance_panel(mudclient *mud);
 void mudclient_handle_appearance_panel_input(mudclient *mud);
 void mudclient_draw_appearance_panel(mudclient *mud);

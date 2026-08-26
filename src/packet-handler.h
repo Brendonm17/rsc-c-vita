@@ -16,4 +16,9 @@ void mudclient_gl_update_wall_models(mudclient *mud);
 #endif
 void mudclient_packet_tick(mudclient *mud);
 
+#ifndef REVISION_177
+// the colour code preceding a player's name on a want_custom_rank_display world, or empty
+const char *orsc_staff_prefix(mudclient *mud, int group_id);
+#endif
+
 #endif

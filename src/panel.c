@@ -32,6 +32,8 @@ void panel_new(Panel *panel, Surface *surface, int max) {
     panel->control_font_style = calloc(max, sizeof(FontStyle));
     panel->control_text = calloc(max, sizeof(char *));
     panel->control_list_entries = calloc(max, sizeof(char **));
+    // per-control crown arrays stay NULL until a list opts in via panel_add_list_entry_crown
+    panel->control_list_entry_crowns = calloc(max, sizeof(int *));
 
     for (int i = 0; i < max; i++) {
         panel->control_text[i] = calloc(PANEL_MAX_TEXT_LEN, sizeof(char));
@@ -256,6 +258,33 @@ void panel_draw_string(Panel *panel, int control, int x, int y, char *text,
     surface_draw_string(panel->surface, text, x, y, font_style, text_colour);
 }
 
+// open the on-screen keyboard for a text-input control, only from a real user tap
+static void panel_open_keyboard(Panel *panel, int control) {
+    if (!mudclient_is_touch(panel->surface->mud)) {
+        return;
+    }
+
+    if (panel->control_type[control] != PANEL_TEXT_INPUT) {
+        return;
+    }
+
+    int width = panel->control_width[control];
+    int height = panel->control_height[control];
+    int is_centred = !panel->control_use_alternative_colour[control];
+
+    int x = (panel->control_x[control] + panel->offset_x) -
+            (is_centred ? width / 2 : 0);
+
+    int y = panel->control_y[control] + panel->offset_y;
+
+    FontStyle font = panel->control_font_style[control];
+
+    mudclient_trigger_keyboard(
+        panel->surface->mud, panel->control_text[control],
+        panel->control_mask_text[control], x, y - (height / 2), width, height,
+        font, is_centred);
+}
+
 void panel_draw_text_input(Panel *panel, int control, int x, int y, int width,
                            int height, char *text, FontStyle font_style) {
     size_t text_length = strlen(text);
@@ -288,6 +317,8 @@ void panel_draw_text_input(Panel *panel, int control, int x, int y, int width,
             panel->mouse_y >= y - (height / 2) && panel->mouse_x <= max_x &&
             panel->mouse_y <= y + (height / 2)) {
             panel_set_focus(panel, control);
+            // user tapped the field, so open the keyboard
+            panel_open_keyboard(panel, control);
         }
 
         if (is_centred) {
@@ -506,6 +537,15 @@ void panel_draw_text_list(Panel *panel, int control, int x, int y, int width,
         (is_touch ? 3 : 0);
 
     for (int i = list_entry_position; i < list_entry_count; i++) {
+        // custom rank crown drawn at the row's text baseline; entry text shifts right by its advance
+        int entry_crown_advance = 0;
+
+        if (panel->control_list_entry_crowns[control] != NULL) {
+            entry_crown_advance = mudclient_draw_crown(
+                panel->surface->mud, x + 2, list_y,
+                panel->control_list_entry_crowns[control][i]);
+        }
+
         if (is_interactive) {
             int text_colour =
                 panel->control_use_alternative_colour[control] ? WHITE : BLACK;
@@ -531,13 +571,14 @@ void panel_draw_text_list(Panel *panel, int control, int x, int y, int width,
                 text_colour = RED;
             }
 
-            surface_draw_string(panel->surface, list_entries[i], x + 2, list_y,
-                                font_style, text_colour);
+            surface_draw_string(panel->surface,
+                                list_entries[i], x + 2 + entry_crown_advance,
+                                list_y, font_style, text_colour);
 
             list_y += entry_height;
         } else {
-            panel_draw_string(panel, control, x + 2, list_y, list_entries[i],
-                              font_style);
+            panel_draw_string(panel, control, x + 2 + entry_crown_advance,
+                              list_y, list_entries[i], font_style);
 
             list_y += surface_text_height(font_style) -
                       panel_text_list_entry_height_mod;
@@ -551,6 +592,11 @@ void panel_draw_text_list(Panel *panel, int control, int x, int y, int width,
 
 static int panel_prepare_component(Panel *panel, PanelControlType type, int x,
                                    int y) {
+    // refuse a control past panel_new()'s capacity and return a sentinel instead of overrunning the arrays
+    if (panel->control_count >= panel->max_controls) {
+        return -1;
+    }
+
     panel->control_type[panel->control_count] = type;
     panel->control_shown[panel->control_count] = 1;
     panel->control_x[panel->control_count] = x;
@@ -726,6 +772,19 @@ void panel_add_list_entry(Panel *panel, int control, int index, char *text) {
 
 void panel_add_list_entry_wrapped(Panel *panel, int control, char *text,
                                   int flash) {
+    panel_add_list_entry_wrapped_crown(panel, control, text, flash, 0);
+}
+
+// as panel_add_list_entry_wrapped, but also records a packed crown int for the entry
+void panel_add_list_entry_wrapped_crown(Panel *panel, int control, char *text,
+                                        int flash, int crown) {
+    int *crowns = panel->control_list_entry_crowns[control];
+
+    if (crown != 0 && crowns == NULL) {
+        crowns = panel->control_list_entry_crowns[control] =
+            calloc(panel->control_input_max_length[control] + 1, sizeof(int));
+    }
+
     int index = panel->control_list_entry_count[control]++;
 
     if (index >= panel->control_input_max_length[control]) {
@@ -737,6 +796,10 @@ void panel_add_list_entry_wrapped(Panel *panel, int control, char *text,
             memcpy(panel->control_list_entries[control][i],
                    panel->control_list_entries[control][i + 1],
                    PANEL_MAX_TEXT_LEN);
+
+            if (crowns != NULL) {
+                crowns[i] = crowns[i + 1];
+            }
         }
     }
 
@@ -745,6 +808,10 @@ void panel_add_list_entry_wrapped(Panel *panel, int control, char *text,
                  PANEL_MAX_TEXT_LEN, "%s", text);
     } else {
         panel->control_list_entries[control][index] = text;
+    }
+
+    if (crowns != NULL) {
+        crowns[index] = crown;
     }
 
     if (flash) {
@@ -773,29 +840,8 @@ void panel_hide(Panel *panel, int control) {
 }
 
 void panel_set_focus(Panel *panel, int control) {
+    // focus only; the on-screen keyboard opens separately from a real user tap
     panel->focus_control_index = control;
-
-    if (!mudclient_is_touch(panel->surface->mud)) {
-        return;
-    }
-
-    if (panel->control_type[control] == PANEL_TEXT_INPUT) {
-        int width = panel->control_width[control];
-        int height = panel->control_height[control];
-        int is_centred = !panel->control_use_alternative_colour[control];
-
-        int x = (panel->control_x[control] + panel->offset_x) -
-                (is_centred ? width / 2 : 0);
-
-        int y = panel->control_y[control] + panel->offset_y;
-
-        FontStyle font = panel->control_font_style[control];
-
-        mudclient_trigger_keyboard(
-            panel->surface->mud, panel->control_text[control],
-            panel->control_mask_text[control], x, y - (height / 2), width,
-            height, font, is_centred);
-    }
 }
 
 int panel_get_list_entry_index(Panel *panel, int control) {
@@ -825,4 +871,10 @@ void panel_destroy(Panel *panel) {
     free(panel->control_font_style);
     free(panel->control_text);
     free(panel->control_list_entries);
+
+    for (int i = 0; i < panel->max_controls; i++) {
+        free(panel->control_list_entry_crowns[i]);
+    }
+
+    free(panel->control_list_entry_crowns);
 }

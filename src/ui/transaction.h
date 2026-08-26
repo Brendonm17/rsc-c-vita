@@ -28,9 +28,11 @@ void mudclient_draw_transaction_items(mudclient *mud, int x, int y, int rows,
                                       int item_count);
 void mudclient_draw_transaction(mudclient *mud, int dialog_x, int dialog_y,
                                 int is_trade);
+// matching noted array; pass NULL where notes cannot occur
 void mudclient_draw_transaction_items_confirm(
     mudclient *mud, int x, int y, int *transaction_confirm_items,
-    int *transaction_confirm_items_count, int transaction_confirm_item_count);
+    int *transaction_confirm_items_count,
+    uint8_t *transaction_confirm_items_noted, int transaction_confirm_item_count);
 void mudclient_draw_transaction_confirm(mudclient *mud, int dialog_x,
                                         int dialog_y, int is_trade);
 

@@ -50,7 +50,20 @@ void mudclient_draw_shop(mudclient *mud) {
                     mud->packet_stream,
                     mud->shop_items[mud->shop_selected_item_index]);
 
-                packet_stream_put_int(mud->packet_stream, item_price);
+#ifndef REVISION_177
+                if (mud->protocol_custom) {
+                    // custom shop buy: catalog id, current stock, quantity to buy
+                    packet_stream_put_short(
+                        mud->packet_stream,
+                        mud->shop_items_count[mud->shop_selected_item_index]);
+
+                    packet_stream_put_short(mud->packet_stream, 1);
+                } else
+#endif
+                {
+                    packet_stream_put_int(mud->packet_stream, item_price);
+                }
+
                 packet_stream_send_packet(mud->packet_stream);
             } else if (mudclient_get_inventory_count(mud, item_id) > 0 &&
                        (is_compact ? (mouse_x > x && mouse_x < shop_width)
@@ -75,7 +88,20 @@ void mudclient_draw_shop(mudclient *mud) {
                     mud->packet_stream,
                     mud->shop_items[mud->shop_selected_item_index]);
 
-                packet_stream_put_int(mud->packet_stream, item_price);
+#ifndef REVISION_177
+                if (mud->protocol_custom) {
+                    // shop sell shares shop buy's packet shape
+                    packet_stream_put_short(
+                        mud->packet_stream,
+                        mud->shop_items_count[mud->shop_selected_item_index]);
+
+                    packet_stream_put_short(mud->packet_stream, 1);
+                } else
+#endif
+                {
+                    packet_stream_put_int(mud->packet_stream, item_price);
+                }
+
                 packet_stream_send_packet(mud->packet_stream);
             } else {
                 mud->mouse_item_count_increment = 0;

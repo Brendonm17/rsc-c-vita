@@ -61,7 +61,27 @@ int player_top_bottom_colours[] = {0xff0000, 0xff8000, 0xffe000, 0xa0e000,
                                    0x0080ff, 0x0030f0, 0xe000e0, 0x303030,
                                    0x604000, 0x805000, 0xffffff};
 
-int player_skin_colours[] = {0xecded0, 0xccb366, 0xb38c40, 0x997326, 0x906020};
+int player_skin_colours[] = {
+    // original player skin colours (0-4)
+    0xecded0, 0xccb366, 0xb38c40, 0x997326, 0x906020,
+    // authentic npc skin colours, previously-used ones removed (5-33)
+    0x000000, 0x000004, 0x0066ff, 0x009000, 0x3cb371,
+    0x55bfee, 0x55cfff, 0x604020, 0x663300, 0x6f5737,
+    0x705010, 0x804000, 0x996633, 0x999999, 0xac9e90,
+    0xdcc399, 0xdccea0, 0xdcffd0, 0xdd3040, 0xeaded2,
+    0xeceed0, 0xecfed0, 0xecffd0, 0xfceee0, 0xff3333,
+    0xff9f55, 0xffded2, 0xfffef0, 0xffffff,
+    // custom unlockables (34-42)
+    0x00a0a0, // teal
+    0xffff00, // yellow
+    0xff69b4, // hot pink
+    0x0180a2, // rsc zombie
+    0x86668e, // evequill purple
+    0x663399, // rebecca purple
+    0xb5ff1d, // easter ogre
+    0xa0c0c0, // silver man
+    0x608080, // coal woman
+};
 
 void game_character_new(GameCharacter *game_character) {
     memset(game_character, 0, sizeof(GameCharacter));

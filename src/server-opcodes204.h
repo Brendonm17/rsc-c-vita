@@ -63,7 +63,35 @@ typedef enum {
     SERVER_TRADE_RECIPIENT_ACCEPTED = 162,
     SERVER_TRADE_ACCEPTED = 15,
     SERVER_WELCOME = 182,
-    SERVER_WORLD_INFO = 25
+    SERVER_WORLD_INFO = 25,
+
+    // custom (client_version 10010) server->client opcodes, guarded on mud->protocol_custom
+    SERVER_EQUIPMENT = 254,
+    SERVER_EQUIPMENT_UPDATE = 255,
+    SERVER_COMBAT_STYLE = 129,
+    SERVER_CLAN = 112,
+    SERVER_PARTY = 116,
+    SERVER_BANK_PIN = 135,
+    SERVER_BANK_PRESET = 150,
+    SERVER_AUCTION = 132,
+    SERVER_ONLINE_LIST = 136,
+    SERVER_NPC_KILLS = 147,
+    SERVER_KILL_ANNOUNCEMENT = 118,
+    SERVER_PROGRESS_BAR = 134,
+    // deliberately never handled; no world can ever emit this opcode
+    SERVER_INPUT_BOX = 110,
+    SERVER_IRONMAN = 113,
+    SERVER_OPENPK_POINTS = 148,
+    SERVER_POINTS_TO_GP = 144,
+    SERVER_ELIXIR = 54,
+    SERVER_EXPSHARED = 98,
+    SERVER_EXPERIENCE_TOGGLE = 34,
+    SERVER_FISHING_TRAWLER = 133,
+    SERVER_BLACK_HOLE = 115,
+    SERVER_UNLOCKED_APPEARANCES = 250,
+    SERVER_ON_TUTORIAL = 111,
+    // an ignored player was renamed; update the ignore entry in place under the new name
+    SERVER_IGNORE_RENAME = 237
 } ServerOpcode;
 
 #endif

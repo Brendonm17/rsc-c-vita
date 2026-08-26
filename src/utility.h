@@ -33,6 +33,14 @@
 #endif
 
 #ifdef RENDER_GL
+#if defined(__vita__)
+// SDL2_image is not in the VitaSDK; libpng decodes PNGs and IMG_* shims keep existing call sites unchanged
+#include <vitaGL.h>
+SDL_Surface *vita_img_load_png(const char *path);
+#define IMG_Load(path) vita_img_load_png(path)
+#define IMG_Init(flags) (1)
+#define IMG_GetError SDL_GetError
+#else
 #ifdef __SWITCH__
 #include <SDL2/SDL_image.h>
 #else
@@ -43,6 +51,7 @@
 #else
 #include <GL/glew.h>
 #include <GL/glu.h>
+#endif
 #endif
 #endif
 #endif
@@ -147,6 +156,7 @@ void *load_data(const char *file_name, size_t extra_size, void *archive_data,
                 size_t *size_out);
 void format_confirm_amount(int amount, char *formatted);
 int get_ticks(void);
+double mud_mono_ms(void);
 void delay_ticks(int ticks);
 void get_level_difference_colour(int level_difference, char *colour);
 void ulaw_to_linear(long size, uint8_t *u_ptr, int16_t *out_ptr);

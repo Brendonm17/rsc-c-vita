@@ -21,10 +21,21 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
                                       mud->local_region_y, menu_x, menu_y, 1);
 
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_GROUNDITEM);
-        packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
-        packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
-        packet_stream_put_short(mud->packet_stream, menu_index);
-        packet_stream_put_short(mud->packet_stream, menu_source_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom cast order: spell, x, y, item id (spell first)
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+            packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
+            packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
+            packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_spell = -1;
@@ -36,8 +47,17 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_USEWITH_GROUNDITEM);
         packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
         packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
-        packet_stream_put_short(mud->packet_stream, menu_index);
-        packet_stream_put_short(mud->packet_stream, menu_source_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom order reverses the last two fields: slot then item id
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_index);
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_item_inventory_index = -1;
@@ -50,7 +70,15 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
         packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
         packet_stream_put_short(mud->packet_stream, menu_index);
-        packet_stream_put_short(mud->packet_stream, menu_source_index);
+
+#ifndef REVISION_177
+        // trailing junk short: authentic-only, the custom parser rejects it
+        if (!mud->protocol_custom)
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+        }
+
         packet_stream_send_packet(mud->packet_stream);
         break;
     case MENU_GROUNDITEM_EXAMINE:
@@ -113,9 +141,19 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
                                  menu_source_index);
 
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_OBJECT);
-        packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
-        packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
-        packet_stream_put_short(mud->packet_stream, menu_target_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom cast order: spell, x, y (spell first)
+            packet_stream_put_short(mud->packet_stream, menu_target_index);
+            packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
+            packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
+            packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
+            packet_stream_put_short(mud->packet_stream, menu_target_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_spell = -1;
@@ -156,8 +194,17 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         break;
     case MENU_CAST_INVITEM:
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_INVITEM);
-        packet_stream_put_short(mud->packet_stream, menu_index);
-        packet_stream_put_short(mud->packet_stream, menu_source_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom CAST_ON_INVENTORY_ITEM = spell, slot (spell first)
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_index);
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_spell = -1;
@@ -175,6 +222,123 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_put_short(mud->packet_stream, menu_index);
         packet_stream_send_packet(mud->packet_stream);
         break;
+#ifndef REVISION_177
+    case MENU_INVENTORY_AUCTION:
+        // auction sell mode: index carries the item id; prompts follow
+        mudclient_auction_start_sell(mud, menu_index);
+        break;
+    case MENU_CLAN_RANK:
+        // 199 clan/rank-player packet: member name, new rank
+        if (menu_index >= 0 && menu_index < mud->orsc_clan_size) {
+            packet_stream_new_packet(mud->packet_stream,
+                                     CLIENT_INTERFACE_OPTIONS);
+            packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_CLAN);
+            packet_stream_put_byte(mud->packet_stream,
+                                   CLAN_OPTION_RANK_PLAYER);
+            packet_stream_put_string_newline(
+                mud->packet_stream,
+                mud->orsc_clan_member_names[menu_index]);
+            packet_stream_put_byte(mud->packet_stream, menu_target_index);
+            packet_stream_send_packet(mud->packet_stream);
+        }
+        break;
+    case MENU_CLAN_LEADERSHIP:
+        // confirm before transferring clan ownership (rank 1)
+        if (menu_index >= 0 && menu_index < mud->orsc_clan_size) {
+            snprintf(mud->orsc_clan_pending_leader,
+                     sizeof(mud->orsc_clan_pending_leader), "%s",
+                     mud->orsc_clan_member_names[menu_index]);
+            snprintf(mud->orsc_clan_invite_top,
+                     sizeof(mud->orsc_clan_invite_top),
+                     "Give %s the leadership?",
+                     mud->orsc_clan_pending_leader);
+            snprintf(mud->orsc_clan_invite_bottom,
+                     sizeof(mud->orsc_clan_invite_bottom),
+                     "This cannot be undone");
+
+            mud->confirm_text_top = mud->orsc_clan_invite_top;
+            mud->confirm_text_bottom = mud->orsc_clan_invite_bottom;
+            mud->confirm_type = CONFIRM_CLAN_LEADERSHIP;
+            mud->show_dialog_confirm = 1;
+        }
+        break;
+    case MENU_CLAN_SETTING:
+        // 199 clan/clan-settings packet: mode, state
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+        packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_CLAN);
+        packet_stream_put_byte(mud->packet_stream, CLAN_OPTION_CLAN_SETTINGS);
+        packet_stream_put_byte(mud->packet_stream, menu_index);
+        packet_stream_put_byte(mud->packet_stream, menu_target_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+    case MENU_PARTY_SETTING:
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+        packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_PARTY);
+        packet_stream_put_byte(mud->packet_stream,
+                               PARTY_OPTION_PARTY_SETTINGS);
+        packet_stream_put_byte(mud->packet_stream, menu_index);
+        packet_stream_put_byte(mud->packet_stream, menu_target_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+    case MENU_PARTY_SHARE:
+        // toggles share-loot or share-exp via chat command
+        mudclient_send_command_string(mud,
+                                      menu_index == 0 ? "shareloot"
+                                                      : "shareexp");
+        break;
+#ifndef REVISION_177
+    case MENU_BANK_ORGANIZE_SWAP:
+    case MENU_BANK_ORGANIZE_INSERT: {
+        // hold the source slot until a second click picks the destination
+        if (mud->bank_organize_slot < 0) {
+            mud->bank_organize_slot = menu_index;
+            mud->bank_organize_insert = menu_type == MENU_BANK_ORGANIZE_INSERT;
+            break;
+        }
+
+        if (mud->bank_organize_slot == menu_index) {
+            mud->bank_organize_slot = -1; // "Cancel move": put it back down
+            break;
+        }
+
+        // bank swap/insert packet: i32 from, i32 to
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+
+        packet_stream_put_byte(mud->packet_stream,
+                               mud->bank_organize_insert
+                                   ? INTERFACE_OPTION_BANK_INSERT
+                                   : INTERFACE_OPTION_BANK_SWAP);
+
+        packet_stream_put_int(mud->packet_stream, mud->bank_organize_slot);
+        packet_stream_put_int(mud->packet_stream, menu_index);
+        packet_stream_send_packet(mud->packet_stream);
+
+        mud->bank_organize_slot = -1;
+        break;
+    }
+#endif
+    case MENU_BANK_EQUIP:
+        // equip an item directly from the bank: u16 bank slot
+        packet_stream_new_packet(mud->packet_stream,
+                                 CLIENT_ITEM_EQUIP_FROM_BANK);
+        packet_stream_put_short(mud->packet_stream, menu_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+    case MENU_EQUIP_UNEQUIP:
+        // unequip from the paperdoll: collapsed 11-slot index byte
+        packet_stream_new_packet(mud->packet_stream,
+                                 CLIENT_UNEQUIP_FROM_EQUIPMENT);
+        packet_stream_put_byte(mud->packet_stream, menu_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+    case MENU_EQUIP_REMOVE_TO_BANK:
+        // unequip an item straight into the open bank: same slot byte
+        packet_stream_new_packet(mud->packet_stream,
+                                 CLIENT_ITEM_REMOVE_TO_BANK);
+        packet_stream_put_byte(mud->packet_stream, menu_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+#endif
     case MENU_INVENTORY_WEAR:
         packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_WEAR);
         packet_stream_put_short(mud->packet_stream, menu_index);
@@ -183,8 +347,64 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
     case MENU_INVENTORY_COMMAND:
         packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_COMMAND);
         packet_stream_put_short(mud->packet_stream, menu_index);
+
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom item-command packet adds i32 amount, u8 command index
+            packet_stream_put_int(mud->packet_stream, 1);
+            packet_stream_put_byte(mud->packet_stream, menu_source_index);
+        }
+#endif
+
         packet_stream_send_packet(mud->packet_stream);
         break;
+#ifndef REVISION_177
+    case MENU_INVENTORY_COMMAND_ALL:
+        // "Bury All": the command packet with the whole count; server batching does the rest
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_COMMAND);
+        packet_stream_put_short(mud->packet_stream, menu_index);
+        packet_stream_put_int(
+            mud->packet_stream,
+            mudclient_get_inventory_count(
+                mud, mud->inventory_item_id[menu_index]));
+        packet_stream_put_byte(mud->packet_stream, menu_source_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+    case MENU_EQUIP_COMMAND:
+        // 0xFFFF sentinel, quantity 1, then the equipped item's ID and the command index
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_COMMAND);
+        packet_stream_put_short(mud->packet_stream, 0xFFFF);
+        packet_stream_put_int(mud->packet_stream, 1);
+        packet_stream_put_short(mud->packet_stream,
+                                mud->equipped_item_id[menu_index]);
+        packet_stream_put_byte(mud->packet_stream, menu_source_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+    case MENU_EQUIP_USE:
+        // the selection becomes the virtual inventory index slot + 30; use-with senders carry it unchanged
+        mud->selected_item_inventory_index = menu_index + INVENTORY_ITEMS_MAX;
+        mud->show_ui_tab = 0;
+
+        mud->selected_item_name =
+            game_data.items[mud->equipped_item_id[menu_index]].name;
+        break;
+    case MENU_EQUIP_DROP: {
+        // 0xFFFF sentinel, the equipped amount, then the item ID
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_DROP);
+        packet_stream_put_short(mud->packet_stream, 0xFFFF);
+        packet_stream_put_int(mud->packet_stream,
+                              mud->equipped_item_amount[menu_index]);
+        packet_stream_put_short(mud->packet_stream,
+                                mud->equipped_item_id[menu_index]);
+        packet_stream_send_packet(mud->packet_stream);
+
+        char drop_message[ITEM_NAME_DISPLAY_MAX + 12];
+        snprintf(drop_message, sizeof(drop_message), "Dropping %s",
+                 game_data.items[mud->equipped_item_id[menu_index]].name);
+        mudclient_show_message(mud, drop_message, MESSAGE_TYPE_GAME);
+        break;
+    }
+#endif
     case MENU_INVENTORY_USE:
         mud->selected_item_inventory_index = menu_index;
         mud->show_ui_tab = 0;
@@ -198,6 +418,20 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
     case MENU_INVENTORY_DROP: {
         packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_DROP);
         packet_stream_put_short(mud->packet_stream, menu_index);
+
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom item-drop packet appends the full stack amount (i32)
+            int amount = 1;
+
+            if (menu_index >= 0 && menu_index < mud->inventory_items_count) {
+                amount = mud->inventory_item_stack_count[menu_index];
+            }
+
+            packet_stream_put_int(mud->packet_stream, amount);
+        }
+#endif
+
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_item_inventory_index = -1;
@@ -211,6 +445,19 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
                  item_name);
 
         mudclient_show_message(mud, formatted_drop, MESSAGE_TYPE_BOR);
+        break;
+    }
+    case MENU_INVENTORY_DROP_X: {
+        // prompt for an amount, then drop that many
+        mud->drop_offer_index = menu_index;
+        mud->offer_id = mud->inventory_item_id[menu_index];
+        mud->offer_max = abs(menu_target_index);
+        mud->input_digits_final = 0;
+        memset(mud->input_digits_current, '\0', INPUT_DIGITS_LENGTH + 1);
+        mud->show_dialog_offer_x = 1;
+
+        mud->selected_item_inventory_index = -1;
+        mud->show_ui_tab = 0;
         break;
     }
     case MENU_INVENTORY_EXAMINE:
@@ -271,8 +518,17 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
                                         mud->local_region_y, x, y, 1);
 
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_NPC);
-        packet_stream_put_short(mud->packet_stream, menu_index);
-        packet_stream_put_short(mud->packet_stream, menu_source_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom CAST_ON_NPC = spell, npcIndex (spell first)
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_index);
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_spell = -1;
@@ -305,14 +561,25 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_send_packet(mud->packet_stream);
         break;
     }
-    case MENU_NPC_COMMAND: {
+    case MENU_NPC_COMMAND:
+#ifndef REVISION_177
+    case MENU_NPC_COMMAND2:
+#endif
+    {
         int x = (menu_x - 64) / MAGIC_LOC;
         int y = (menu_y - 64) / MAGIC_LOC;
 
         mudclient_walk_to_action_source(mud, mud->local_region_x,
                                         mud->local_region_y, x, y, 1);
 
-        packet_stream_new_packet(mud->packet_stream, CLIENT_NPC_COMMAND);
+        // 202 selects command1, 203 selects command2
+        packet_stream_new_packet(mud->packet_stream,
+#ifndef REVISION_177
+                                 menu_type == MENU_NPC_COMMAND2
+                                     ? CLIENT_NPC_COMMAND2
+                                     :
+#endif
+                                     CLIENT_NPC_COMMAND);
         packet_stream_put_short(mud->packet_stream, menu_index);
         packet_stream_send_packet(mud->packet_stream);
         break;
@@ -342,8 +609,17 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
                                         mud->local_region_y, x, y, 1);
 
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_PLAYER);
-        packet_stream_put_short(mud->packet_stream, menu_index);
-        packet_stream_put_short(mud->packet_stream, menu_source_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom PLAYER_CAST_PVP = spell, playerIndex (spell first)
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_index);
+            packet_stream_put_short(mud->packet_stream, menu_source_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_spell = -1;
@@ -392,14 +668,34 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_put_short(mud->packet_stream, menu_index);
         packet_stream_send_packet(mud->packet_stream);
         break;
+#ifndef REVISION_177
+    case MENU_PLAYER_PARTY_INVITE:
+        // 199, party sub-op 12, action 2, u16 server index
+        packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+        packet_stream_put_byte(mud->packet_stream, 12);
+        packet_stream_put_byte(mud->packet_stream, 2);
+        packet_stream_put_short(mud->packet_stream, menu_index);
+        packet_stream_send_packet(mud->packet_stream);
+        break;
+#endif
     case MENU_CAST_GROUND:
         mudclient_walk_to_action_source(mud, mud->local_region_x,
                                         mud->local_region_y, menu_x, menu_y, 1);
 
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_GROUND);
-        packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
-        packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
-        packet_stream_put_short(mud->packet_stream, menu_index);
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom cast order: spell, x, y (spell first)
+            packet_stream_put_short(mud->packet_stream, menu_index);
+            packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
+            packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
+        } else
+#endif
+        {
+            packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
+            packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
+            packet_stream_put_short(mud->packet_stream, menu_index);
+        }
         packet_stream_send_packet(mud->packet_stream);
 
         mud->selected_spell = -1;
@@ -428,8 +724,17 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         mud->selected_spell = -1;
         break;
     case MENU_BANK_WITHDRAW:
-    case MENU_BANK_DEPOSIT: {
+    case MENU_BANK_DEPOSIT:
+#ifndef REVISION_177
+    case MENU_BANK_DEPOSIT_UNCERT:
+#endif
+    {
         int is_withdraw = menu_type == MENU_BANK_WITHDRAW;
+
+#ifndef REVISION_177
+        // remembered across the offer-X dialog, like the real client's uncertMode argument
+        mud->bank_offer_uncert = menu_type == MENU_BANK_DEPOSIT_UNCERT;
+#endif
 
         if (menu_target_index < 0) {
             mud->bank_offer_type =
@@ -505,6 +810,9 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
                 window.open(url, '_blank');
             },
             encoded_url);
+#elif defined(__vita__)
+        // no shell to open the wiki link on vita; no-op
+        (void)encoded_url;
 #else
         char formatted_command[256];
 
@@ -639,14 +947,20 @@ void mudclient_create_top_mouse_menu(mudclient *mud) {
         int x_position = 6;
 
         if (is_touch) {
-            if (mud->options->display_fps == 0) {
-                y_offset = 18;
-            }
+            if (mud->options->touch_bottom_ui) {
+                // the tab strip owns the bottom edge; the hover text takes
+                // the freed top strip (chat text starts at y 32)
+                y_position = 12;
+            } else {
+                if (mud->options->display_fps == 0) {
+                    y_offset = 18;
+                }
 
-            y_position = mud->surface->height - y_offset;
+                y_position = mud->surface->height - y_offset;
 
-            if (mud->is_in_wilderness) {
-                x_position = 76;
+                if (mud->is_in_wilderness) {
+                    x_position = 76;
+                }
             }
         }
 
@@ -756,9 +1070,15 @@ void mudclient_menu_add_id_wiki(mudclient *mud, const char *display,
 
 void mudclient_menu_add_ground_item(mudclient *mud, int index) {
     int item_id = mud->ground_items[index].id;
-    char *item_name = game_data.items[item_id].name;
 
-    char formatted_item_name[64];
+    // noted ground items display as "<item> Certificate"
+    char item_name[ITEM_NAME_DISPLAY_MAX];
+
+    mudclient_item_display_name(mud, item_id, mud->ground_items[index].noted,
+                                item_name, sizeof(item_name));
+
+    // +6 for the "@lre@" colour prefix and the terminator
+    char formatted_item_name[ITEM_NAME_DISPLAY_MAX + 6];
     snprintf(formatted_item_name, sizeof(formatted_item_name), "@lre@%s",
              item_name);
 
@@ -1048,6 +1368,30 @@ void mudclient_create_right_click_menu(mudclient *mud) {
                         player->server_index;
 
                     mud->menu_items_count++;
+
+#ifndef REVISION_177
+                    // want_parties worlds append "Invite to party" right after Follow
+                    if ((mud->protocol_custom && mud->orsc.want_parties) ||
+                        MUD_SP_WIRE(mud)) {
+                        strcpy(mud->menu_items[mud->menu_items_count]
+                                   .action_text,
+                               "Invite to party");
+
+                        snprintf(mud->menu_items[mud->menu_items_count]
+                                     .target_text,
+                                 sizeof(mud->menu_items[mud->menu_items_count]
+                                            .target_text),
+                                 "@whi@%s%s", player->name, level_text);
+
+                        mud->menu_items[mud->menu_items_count].type =
+                            MENU_PLAYER_PARTY_INVITE;
+
+                        mud->menu_items[mud->menu_items_count].index =
+                            player->server_index;
+
+                        mud->menu_items_count++;
+                    }
+#endif
                 }
             } else if (type == 2 && !mud->options->ground_item_models) {
                 mudclient_menu_add_ground_item(mud, index);
@@ -1213,6 +1557,38 @@ void mudclient_create_right_click_menu(mudclient *mud) {
                         mud->menu_items_count++;
                     }
 
+#ifndef REVISION_177
+                    // npc command2: a second, optional npc action
+                    if (game_data.npcs[npc_id].command2 != NULL &&
+                        strlen(game_data.npcs[npc_id].command2) > 0) {
+                        snprintf(
+                            mud->menu_items[mud->menu_items_count].action_text,
+                            sizeof(mud->menu_items[mud->menu_items_count]
+                                       .action_text),
+                            "%s", game_data.npcs[npc_id].command2);
+
+                        snprintf(
+                            mud->menu_items[mud->menu_items_count].target_text,
+                            sizeof(mud->menu_items[mud->menu_items_count]
+                                       .target_text),
+                            "%s", formatted_npc_name);
+
+                        mud->menu_items[mud->menu_items_count].type =
+                            MENU_NPC_COMMAND2;
+
+                        mud->menu_items[mud->menu_items_count].x =
+                            npc->current_x;
+
+                        mud->menu_items[mud->menu_items_count].y =
+                            npc->current_y;
+
+                        mud->menu_items[mud->menu_items_count].index =
+                            npc->server_index;
+
+                        mud->menu_items_count++;
+                    }
+#endif
+
                     strcpy(mud->menu_items[mud->menu_items_count].action_text,
                            "Examine");
 
@@ -1299,15 +1675,30 @@ void mudclient_create_right_click_menu(mudclient *mud) {
 
                     mud->menu_items_count++;
                 } else {
-                    if (strncasecmp(
-                            game_data.wall_objects[wall_object_id].command1,
-                            "WalkTo", 6) != 0) {
+                    char *wall_command1 =
+                        game_data.wall_objects[wall_object_id].command1;
+                    char *wall_command2 =
+                        game_data.wall_objects[wall_object_id].command2;
+
+#ifndef REVISION_177
+                    // want_leftclick_webs builds the web def as Slice/WalkTo; substituted per menu build instead of
+                    // mutating game_data, which loads once and must stay authentic for a later authentic session
+                    if (mud->protocol_custom &&
+                        mud->orsc.want_leftclick_webs &&
+                        strcasecmp(
+                            game_data.wall_objects[wall_object_id].name,
+                            "web") == 0) {
+                        wall_command1 = "Slice";
+                        wall_command2 = "WalkTo";
+                    }
+#endif
+
+                    if (strncasecmp(wall_command1, "WalkTo", 6) != 0) {
                         snprintf(
                             mud->menu_items[mud->menu_items_count].action_text,
                             sizeof(mud->menu_items[mud->menu_items_count]
                                        .action_text),
-                            "%s",
-                            game_data.wall_objects[wall_object_id].command1);
+                            "%s", wall_command1);
 
                         mud->menu_items[mud->menu_items_count].type =
                             MENU_WALL_OBJECT_COMMAND1;
@@ -1315,15 +1706,12 @@ void mudclient_create_right_click_menu(mudclient *mud) {
                         mud->menu_items_count++;
                     }
 
-                    if (strncasecmp(
-                            game_data.wall_objects[wall_object_id].command2,
-                            "Examine", 7) != 0) {
+                    if (strncasecmp(wall_command2, "Examine", 7) != 0) {
                         snprintf(
                             mud->menu_items[mud->menu_items_count].action_text,
                             sizeof(mud->menu_items[mud->menu_items_count]
                                        .action_text),
-                            "%s",
-                            game_data.wall_objects[wall_object_id].command2);
+                            "%s", wall_command2);
 
                         snprintf(
                             mud->menu_items[mud->menu_items_count].target_text,

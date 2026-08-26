@@ -4,7 +4,13 @@
 typedef enum CONFIRM_TYPE {
     CONFIRM_TUTORIAL = 1,
     CONFIRM_OPTIONS_DEFAULT = 2,
-    CONFIRM_OPTIONS_VANILLA = 3
+    CONFIRM_OPTIONS_VANILLA = 3,
+    // clan invite: ok accepts, any dismissal declines
+    CONFIRM_CLAN_INVITE = 4,
+    // OpenRSC custom parties: same accept/decline contract (SEND_PARTY 2)
+    CONFIRM_PARTY_INVITE = 5,
+    // leadership transfer confirm dialog before sending rank 1
+    CONFIRM_CLAN_LEADERSHIP = 6
 } CONFIRM_TYPE;
 
 #include "../mudclient.h"

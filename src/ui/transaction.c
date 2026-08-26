@@ -1,5 +1,17 @@
 #include "transaction.h"
 
+#ifndef REVISION_177
+// derives noted flag for merged trade offers from inventory holdings
+static int transaction_offer_noted(mudclient *mud, int item_id) {
+    for (int s = 0; s < mud->inventory_items_count; s++) {
+        if (mud->inventory_item_id[s] == item_id && mudclient_item_noted(mud, s)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
+
 void mudclient_offer_transaction_item(mudclient *mud,
                                       ClientOpcode update_opcode, int item_id,
                                       int item_amount) {
@@ -91,6 +103,15 @@ void mudclient_offer_transaction_item(mudclient *mud,
 
         packet_stream_put_int(mud->packet_stream,
                               mud->transaction_items_count[j]);
+
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // 8 bytes/item on custom: id, amount, u16 noted
+            packet_stream_put_short(
+                mud->packet_stream,
+                transaction_offer_noted(mud, mud->transaction_items[j]));
+        }
+#endif
     }
 
     packet_stream_send_packet(mud->packet_stream);
@@ -201,6 +222,15 @@ void mudclient_remove_transaction_item(mudclient *mud,
 
         packet_stream_put_int(mud->packet_stream,
                               mud->transaction_items_count[i]);
+
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // trailing u16 noted flag per item
+            packet_stream_put_short(
+                mud->packet_stream,
+                transaction_offer_noted(mud, mud->transaction_items[i]));
+        }
+#endif
     }
 
     packet_stream_send_packet(mud->packet_stream);
@@ -335,9 +365,13 @@ void mudclient_draw_transaction(mudclient *mud, int dialog_x, int dialog_y,
 
                 if (mud->options->transaction_menus &&
                     !mud->show_right_click_menu) {
-                    char *item_name = game_data.items[item_id].name;
+                    char item_name[ITEM_NAME_DISPLAY_MAX];
 
-                    char formatted_item_name[strlen(item_name) + 6];
+                    mudclient_item_display_name(mud, item_id,
+                                                mudclient_item_noted(mud, slot),
+                                                item_name, sizeof(item_name));
+
+                    char formatted_item_name[ITEM_NAME_DISPLAY_MAX + 6];
                     sprintf(formatted_item_name, "@lre@%s", item_name);
 
                     int item_amount =
@@ -381,9 +415,19 @@ void mudclient_draw_transaction(mudclient *mud, int dialog_x, int dialog_y,
 
                 if (mud->options->transaction_menus &&
                     !mud->show_right_click_menu) {
-                    char *item_name = game_data.items[item_id].name;
+                    // same tab split as the id/count arrays above
+                    uint8_t *transaction_items_noted =
+                        mud->transaction_tab == 0
+                            ? mud->transaction_items_noted
+                            : mud->transaction_recipient_items_noted;
 
-                    char formatted_item_name[strlen(item_name) + 6];
+                    char item_name[ITEM_NAME_DISPLAY_MAX];
+
+                    mudclient_item_display_name(mud, item_id,
+                                                transaction_items_noted[slot],
+                                                item_name, sizeof(item_name));
+
+                    char formatted_item_name[ITEM_NAME_DISPLAY_MAX + 6];
                     sprintf(formatted_item_name, "@lre@%s", item_name);
 
                     int item_amount = 0;
@@ -716,7 +760,9 @@ void mudclient_draw_transaction(mudclient *mud, int dialog_x, int dialog_y,
 
 void mudclient_draw_transaction_items_confirm(
     mudclient *mud, int x, int y, int *transaction_confirm_items,
-    int *transaction_confirm_items_count, int transaction_confirm_item_count) {
+    int *transaction_confirm_items_count,
+    uint8_t *transaction_confirm_items_noted,
+    int transaction_confirm_item_count) {
     if (transaction_confirm_item_count == 0) {
         surface_draw_string_centre(mud->surface, "Nothing!", x, y, FONT_BOLD_12,
                                    WHITE);
@@ -725,7 +771,16 @@ void mudclient_draw_transaction_items_confirm(
 
     for (int i = 0; i < transaction_confirm_item_count; i++) {
         int item_id = transaction_confirm_items[i];
-        char *item_name = game_data.items[item_id].name;
+
+        int noted = transaction_confirm_items_noted != NULL
+                        ? transaction_confirm_items_noted[i]
+                        : 0;
+
+        char item_name[ITEM_NAME_DISPLAY_MAX];
+
+        mudclient_item_display_name(mud, item_id, noted, item_name,
+                                    sizeof(item_name));
+
         size_t item_length = strlen(item_name);
 
         size_t line_length = item_length + 15;
@@ -734,7 +789,7 @@ void mudclient_draw_transaction_items_confirm(
 
         strcpy(item_line, item_name);
 
-        if (game_data.items[item_id].stackable == 0) {
+        if (game_data_item_stacks(item_id, noted)) {
             strcat(item_line, " x ");
 
             format_confirm_amount(transaction_confirm_items_count[i],
@@ -779,7 +834,17 @@ void mudclient_draw_transaction_confirm(mudclient *mud, int dialog_x,
         transaction_height - (is_compact ? 11 : 32), GREY_98, 160);
 
     char username[USERNAME_LENGTH + 1] = {0};
-    decode_username(mud->transaction_recipient_confirm_name, username);
+
+#ifndef REVISION_177
+    if (mud->protocol_custom) {
+        // custom sends the name as a string, not a base37 long
+        strncpy(username, mud->transaction_recipient_confirm_name_str,
+                sizeof(username) - 1);
+    } else
+#endif
+    {
+        decode_username(mud->transaction_recipient_confirm_name, username);
+    }
 
     char formatted_confirm[USERNAME_LENGTH + 37] = {0};
 
@@ -838,20 +903,28 @@ void mudclient_draw_transaction_confirm(mudclient *mud, int dialog_x,
                     ? mud->transaction_confirm_item_count
                     : mud->transaction_recipient_confirm_item_count;
 
+            uint8_t *confirm_items_noted =
+                mud->transaction_tab == 0
+                    ? mud->transaction_confirm_items_noted
+                    : mud->transaction_recipient_confirm_items_noted;
+
             mudclient_draw_transaction_items_confirm(
                 mud, dialog_x + (transaction_width / 2), dialog_y + y,
-                confirm_items, confirm_items_count, confirm_item_count);
+                confirm_items, confirm_items_count, confirm_items_noted,
+                confirm_item_count);
         }
     } else {
         mudclient_draw_transaction_items_confirm(
             mud, dialog_x + 351, dialog_y + y,
             mud->transaction_recipient_confirm_items,
             mud->transaction_recipient_confirm_items_count,
+            mud->transaction_recipient_confirm_items_noted,
             mud->transaction_recipient_confirm_item_count);
 
         mudclient_draw_transaction_items_confirm(
             mud, dialog_x + 117, dialog_y + y, mud->transaction_confirm_items,
             mud->transaction_confirm_items_count,
+            mud->transaction_confirm_items_noted,
             mud->transaction_confirm_item_count);
     }
 

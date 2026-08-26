@@ -43,6 +43,8 @@ struct NpcConfig {
     char *name;
     char *description;
     char *command;
+    // second npc command, sent via CLIENT_NPC_COMMAND2 opcode 203
+    char *command2;
     int16_t sprites[NPC_SPRITE_COUNT];
     uint16_t width;
     uint16_t height;
@@ -85,6 +87,8 @@ struct ItemConfig {
     uint8_t stackable;
     uint8_t special; /* untradable */
     uint8_t members;
+    // has_note_type: stackable false and (untradeable false or noteable); 0 = no noted form
+    uint8_t has_note_type;
 };
 
 struct TileConfig {
@@ -162,5 +166,19 @@ struct MudConfig {
 extern struct MudConfig game_data;
 extern int game_data_get_model_index(char *name);
 extern void game_data_load_data(int8_t *buffer, int is_members, int version);
+
+void game_data_item_note_name(int id, int noted, int cert_as_notes, char *out,
+                              int out_size);
+const char *game_data_item_note_description(int id, int noted,
+                                            int cert_as_notes);
+// 1 = noted item shows a stack count
+int game_data_item_stacks(int id, int noted);
+// 1 = item can be wielded while noted
+int game_data_item_wieldable(int id, int noted);
+
+// index into a comma-separated list of item commands
+int game_data_item_command_count(int id);
+// writes nth comma-separated command into out; returns length or 0
+int game_data_item_command_at(int id, int index, char *out, int out_size);
 
 #endif

@@ -8,6 +8,9 @@ typedef enum {
     CLIENT_BANK_CLOSE = 212,
     CLIENT_BANK_DEPOSIT = 23,
     CLIENT_BANK_WITHDRAW = 22,
+    // OpenRSC custom-bank bulk deposits (want_custom_banks). No payload.
+    CLIENT_BANK_DEPOSIT_ALL_INVENTORY = 24,
+    CLIENT_BANK_DEPOSIT_ALL_EQUIPMENT = 26,
     CLIENT_CAST_GROUND = 158,
     CLIENT_CAST_GROUNDITEM = 249,
     CLIENT_CAST_INVITEM = 4,
@@ -41,6 +44,8 @@ typedef enum {
     CLIENT_LOGOUT = 102,
     CLIENT_NPC_ATTACK = 190,
     CLIENT_NPC_COMMAND = 202,
+    // second npc command slot; only custom npc defs use it
+    CLIENT_NPC_COMMAND2 = 203,
     CLIENT_NPC_TALK = 153,
     CLIENT_OBJECT_COMMAND1 = 136,
     CLIENT_OBJECT_COMMAND2 = 79,
@@ -80,7 +85,15 @@ typedef enum {
     CLIENT_WALK = 187,
     CLIENT_WALK_ACTION = 16,
     CLIENT_WALL_OBJECT_COMMAND1 = 14,
-    CLIENT_WALL_OBJECT_COMMAND2 = 127
+    CLIENT_WALL_OBJECT_COMMAND2 = 127,
+
+    // custom opcode 199: sub-op byte selects subsystem (bank pin, auction, clan, party, points)
+    CLIENT_INTERFACE_OPTIONS = 199,
+    CLIENT_UNEQUIP_FROM_EQUIPMENT = 168,
+    CLIENT_ITEM_EQUIP_FROM_BANK = 172,
+    CLIENT_ITEM_REMOVE_TO_BANK = 173,
+    CLIENT_BANK_SAVE_PRESET = 27,
+    CLIENT_BANK_LOAD_PRESET = 28
 } ClientOpcode;
 
 #endif

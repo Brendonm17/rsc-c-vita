@@ -1,8 +1,12 @@
 #include "mudclient.h"
 
+#ifdef __vita__
+#include <psp2/kernel/sysmem.h>
+#endif
+
 #ifdef SDL2
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(__vita__)
 static SDL_Joystick *joystick;
 #endif
 
@@ -75,13 +79,20 @@ void mudclient_start_application(mudclient *mud, char *title) {
     }
 #endif
 
+#ifdef __vita__
+    // front touch drives the cursor via finger events; stop SDL synthesising mouse events from the touchscreens, and
+    // scale the software surface up to the panel
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+#endif
+
     int init = SDL_INIT_VIDEO;
 
     if (mud->options->members && !mud->options->lowmem) {
         init |= SDL_INIT_AUDIO;
     }
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(__vita__)
     init |= SDL_INIT_JOYSTICK;
 #endif
 
@@ -94,7 +105,7 @@ void mudclient_start_application(mudclient *mud, char *title) {
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 #endif
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(__vita__)
     SDL_JoystickEventState(SDL_ENABLE);
     joystick = SDL_JoystickOpen(0);
 #endif
@@ -126,6 +137,8 @@ void mudclient_start_application(mudclient *mud, char *title) {
 #endif
 
 #ifdef RENDER_GL
+#ifndef __vita__
+    // vitaGL owns the GXM display directly; it needs no SDL GL window flag or context attributes
     windowflags |= SDL_WINDOW_OPENGL;
 
 #ifdef EMSCRIPTEN
@@ -154,13 +167,35 @@ void mudclient_start_application(mudclient *mud, char *title) {
     // SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
     // SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 #endif /* EMSCRIPTEN */
+#endif // !__vita__
 #endif /* RENDER_GL */
 
+#ifdef __vita__
+    // Fixed 960x544 panel.
+    (void)windowflags;
+
+    mud->window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED,
+                                   SDL_WINDOWPOS_CENTERED, 960, 544,
+                                   SDL_WINDOW_SHOWN);
+
+#ifndef RENDER_GL
+    // software renderer: SDL's gxm renderer upscales the software surface to the panel. the hardware (vitaGL) build
+    // owns GXM itself and must not create an SDL renderer
+    mud->vita_renderer = SDL_CreateRenderer(
+        mud->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+
+    if (mud->vita_renderer == NULL) {
+        mud_error("SDL_CreateRenderer(): %s\n", SDL_GetError());
+        exit(1);
+    }
+#endif
+#else
     mud->window =
         SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          mud->game_width, mud->game_height, windowflags);
 
     SDL_SetWindowMinimumSize(mud->window, MUD_MIN_WIDTH, MUD_MIN_HEIGHT);
+#endif
 
     mud->default_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
     mud->hand_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
@@ -173,6 +208,64 @@ void mudclient_start_application(mudclient *mud, char *title) {
         mud_error("unable to initialize sdl_image: %s\n", IMG_GetError());
     }
 
+#ifdef __vita__
+    // must be set before vglInit*. triple buffering (vitaGL's default); costs one extra 960x544x4 (~2MB) colour
+    // surface in CDRAM, depth/stencil shared
+    vglUseTripleBuffering(GL_TRUE);
+
+#if defined(RENDER_GL)
+    // enlarge the shader-patcher buffers (must be set before vglInit*) and pin the circular pool so the first world
+    // frame records into a large pool
+    vglSetupShaderPatcher(4 * 1024 * 1024, 2 * 1024 * 1024, 2 * 1024 * 1024);
+    vglSetCircularPoolSize(32 * 1024 * 1024);
+
+    // GXM parameter buffer: where the tiler stores post-vertex-shader data and tile lists mid-frame. sceGxm's default
+    // is 16MB and vitaGL never enlarges it; a dense zoomed-out scene overflows it, so 32MB. must be set before vglInit*
+    vglSetParamBufferSize(24 * 1024 * 1024);
+    // 24MB not 32: the PB is carved from CDRAM; 24MB keeps +8MB over the 16MB default while restoring ~8MB CDRAM
+
+    // scene splits disabled (see scene-gl.c); the depth-persistence force-store is not enabled
+#endif
+
+    // use vglInitExtended with a 56MB RAM threshold so ~56MB stays free for GXM's structural buffers (parameter
+    // buffer, ring buffers, USSE, shader-patcher); textures/vertices go to CDRAM via vglUseVram
+
+    // vglInit* returns res_fallback, not a success flag: GL_FALSE = inited at the requested 960x544, GL_TRUE = inited
+    // but resolution downgraded. on genuine failure vitaGL aborts internally, so call it, log the fallback flag, and continue
+    GLboolean vgl_res_fallback =
+        vglInitExtended(0, 960, 544, 40 * 1024 * 1024, SCE_GXM_MULTISAMPLE_NONE);
+
+    if (vgl_res_fallback) {
+        mud_error("[gl] vglInitExtended fell back below native 960x544\n");
+    }
+
+    // Prefer VRAM (CDRAM) first for textures and vertex data. Post-init.
+    vglUseVram(GL_TRUE);
+
+#if defined(__vita__) && defined(RENDER_GL)
+    // hardware vsync at 60Hz: vitaGL's display callback waits sceDisplayWaitVblankStartMulti(vsync_interval) per
+    // present, so 1 = tear-free 60fps, no busy-wait
+    {
+        extern uint32_t vsync_interval;
+        // initial value from the saved fps mode. 1 = 60 FPS target (hardware vsync), 2 = locked 30 FPS
+        vsync_interval = mud->options->fps_60 ? 1 : 2;
+    }
+#endif
+
+#if defined(RENDER_GL)
+    // warm-up: flush every backbuffer with a clean clear+swap before any real frame, establishing a sceGxm scene
+    // cycle (BeginScene/EndScene) on each swapchain buffer
+    for (int warm = 0; warm < 3; warm++) {
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        vglSwapBuffers(GL_FALSE);
+    }
+#endif
+
+    // vitaGL's runtime GLSL->Cg compiler (vitashark -> SceShaccCg). requires libshacccg.suprx installed on the device
+    // (ur0:/data/)
+    vglSetupRuntimeShaderCompiler(SHARK_OPT_DEFAULT, 0, 0, 0);
+#else
     SDL_GLContext *context = SDL_GL_CreateContext(mud->gl_window);
 
     if (!context) {
@@ -184,6 +277,7 @@ void mudclient_start_application(mudclient *mud, char *title) {
         mud_error("SDL_GL_MakeCurrent(): %s\n", SDL_GetError());
         exit(1);
     }
+#endif
 #endif
 }
 #endif

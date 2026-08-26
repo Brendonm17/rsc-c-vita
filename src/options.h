@@ -39,6 +39,8 @@ typedef struct Options Options;
      "idle_logout = %d\n"                                                      \
      "; Remember username on login screen\n"                                   \
      "remember_username = %d\n"                                                \
+     "; Last co-op transport on the world screen (0 = WiFi/LAN, 1 = Ad-hoc)\n"  \
+     "spnet_adhoc = %d\n"                                                      \
      "; Remember password on login screen (not secure)\n"                      \
      "remember_password = %d\n\n"                                              \
      "username = %s\n"                                                         \
@@ -62,6 +64,8 @@ typedef struct Options Options;
      "tab_respond = %d\n"                                                      \
      "; Use number keys to select options\n"                                   \
      "option_numbers = %d\n"                                                   \
+     "; Switch UI tabs with the F2-F7 keys (OpenRSC keyboard shortcuts)\n"      \
+     "keyboard_shortcuts = %d\n"                                               \
      "; Adds a menu with different directions to face to the minimap "         \
      "compass\n"                                                               \
      "compass_menu = %d\n"                                                     \
@@ -79,10 +83,14 @@ typedef struct Options Options;
      "hold_to_buy = %d\n"                                                      \
      "; Drag vertically to zoom camera\n"                                      \
      "touch_vertical_drag = %d\n"                                              \
-     "; Drag horizontally to pan camera\n"                                     \
+     "; Drag horizontally to rotate camera\n"                                  \
+     "touch_horizontal_drag = %d\n"                                            \
+     "; Pinch to zoom camera\n"                                                \
      "touch_pinch = %d\n"                                                      \
      "; Milliseconds until right click \n"                                     \
-     "touch_menu_delay = %d\n\n"                                               \
+     "touch_menu_delay = %d\n"                                                 \
+     "; Chat tabs + keyboard button on the bottom edge (hover text on top)\n"  \
+     "touch_bottom_ui = %d\n\n"                                                \
                                                                                \
      "; Low memory mode\n"                                                     \
      "lowmem = %d\n"                                                           \
@@ -92,6 +100,8 @@ typedef struct Options Options;
      "flicker = %d\n"                                                          \
      "; Fog of War (FoW)\n"                                                    \
      "fog_of_war = %d\n"                                                       \
+     "; Target 60 FPS (0 = locked 30 FPS)\n"                                   \
+     "fps_60 = %d\n"                                                           \
      "; Target framerate of @ran@ text effect\n"                               \
      "ran_target_fps = %d\n"                                                   \
      "; Display the FPS at the bottom right of the screen\n"                   \
@@ -114,6 +124,10 @@ typedef struct Options Options;
      "total_experience = %d\n"                                                 \
      "; Show experience drops\n"                                               \
      "experience_drops = %d\n"                                                 \
+     "; Show the OpenRSC xp progress counter while gaining xp\n"               \
+     "xp_counter = %d\n"                                                       \
+     "; Expand the xp counter with gained / xp-per-hour details\n"             \
+     "xp_counter_details = %d\n"                                               \
      "; Show a count of inventory items on the UI\n"                           \
      "inventory_count = %d\n"                                                  \
      "; Condenses item amounts with K and M and add their amounts to "         \
@@ -154,7 +168,14 @@ typedef struct Options Options;
      "width\n"                                                                 \
      "bank_inventory = %d\n"                                                   \
      "; Maintain the selected bank slot when items change position\n"          \
-     "bank_maintain_slot = %d\n")
+     "bank_maintain_slot = %d\n\n"                                             \
+                                                                               \
+     "; Vita: stick-cursor style, 0 crosshair, 1+ weapon item sprite\n"       \
+     "vita_cursor_style = %d\n"                                                 \
+     "; Vita: left-stick cursor speed (pixels/frame at full deflection)\n"      \
+     "vita_cursor_sensitivity = %d\n"                                          \
+     "; Vita: analog-stick dead-zone (percent of full deflection)\n"            \
+     "vita_stick_deadzone = %d\n")
 
 #define OPTION_INI_STR(name, option, length)                                   \
     {                                                                          \
@@ -215,6 +236,9 @@ struct Options {
     int remember_username;
     int remember_password;
 
+    // last co-op transport selected (0 = WiFi/LAN, 1 = Ad-hoc)
+    int spnet_adhoc;
+
     /* diversify NPCs sent by server (custom) */
     int diversify_npcs;
 
@@ -246,6 +270,9 @@ struct Options {
     /* use number keys to select options */
     int option_numbers;
 
+    // OpenRSC want_keyboard_shortcuts: F2..F7 switch UI tabs
+    int keyboard_shortcuts;
+
     /* adds a menu with different directions to face to the minimap compass */
     int compass_menu;
 
@@ -270,17 +297,35 @@ struct Options {
     /* drag vertically to zoom camera */
     int touch_vertical_drag;
 
-    /* drag horizontally to pan camera */
+    // drag horizontally to rotate camera
+    int touch_horizontal_drag;
+
+    // pinch to zoom camera
     int touch_pinch;
 
     /* milliseconds until right click */
     int touch_menu_delay;
+
+    // chat tabs + keyboard button on the bottom edge (hover text on top)
+    int touch_bottom_ui;
+
+    // Vita: stick-cursor style (0 = crosshair, 1+ = a weapon item sprite)
+    int vita_cursor_style;
+
+    // Vita: left-stick cursor speed (pixels/frame at full deflection)
+    int vita_cursor_sensitivity;
+
+    // Vita: analog-stick dead-zone as a percent of full deflection
+    int vita_stick_deadzone;
 
     /* low memory mode */
     int lowmem;
 
     /* F1 mode - only render every second scanline */
     int interlace;
+
+    // checked = 60 fps (vsync interval 1), unchecked = 30 fps (interval 2)
+    int fps_60;
 
     /* underground lighting flicker */
     int flicker;
@@ -319,6 +364,10 @@ struct Options {
 
     /* show experience drops */
     int experience_drops;
+
+    // xp progress counter and its expanded gained / xp-per-hour details
+    int xp_counter;
+    int xp_counter_details;
 
     /* show a count of inventory items on the UI */
     int inventory_count;

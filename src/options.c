@@ -14,7 +14,12 @@ void options_new(Options *options) {
     memset(options, 0, sizeof(Options));
 
     /* presets */
+#ifdef WITH_SINGLEPLAYER
+    // fresh install defaults to the first single-player world; stored as 1000+index
+    options->last_world = 1000;
+#else
     options->last_world = 0;
+#endif
     options->account_management = 0;
     options->anti_macro = 0;
     options->retry_login_on_disconnect = 0;
@@ -46,12 +51,20 @@ void options_set_defaults(Options *options) {
     options->version_sounds = VERSION_SOUNDS;
     options->version_textures = VERSION_TEXTURES;
     options->fatigue = 1;
-    options->max_quests = 50;
+    // 52 = authentic 50 + this build's 2 custom quests (Rune Mysteries, Peeling the Onion); bounds the quest-tab
+    // render loop
+    options->max_quests = 52;
     options->max_skills = 18;
     options->registration = 0;
     options->idle_logout = 0;
-    options->remember_username = 0;
+    options->remember_username = 1;
+    options->spnet_adhoc = 0;
+#ifdef __vita__
+    // pre-fill the saved password at login
+    options->remember_password = 1;
+#else
     options->remember_password = 0;
+#endif
     options->diversify_npcs = 0;
     options->rename_herblaw_items = 0;
 
@@ -73,6 +86,7 @@ void options_set_defaults(Options *options) {
     options->zoom_camera = 1;
     options->tab_respond = 1;
     options->option_numbers = 1;
+    options->keyboard_shortcuts = 1;
     options->compass_menu = 1;
     options->transaction_menus = 1;
     options->offer_x = 1;
@@ -81,21 +95,31 @@ void options_set_defaults(Options *options) {
     options->combat_style_always = 0;
     options->hold_to_buy = 1;
     options->touch_vertical_drag = 33;
+    options->touch_horizontal_drag = 75;
     options->touch_pinch = 50;
     options->touch_menu_delay = 350;
+    options->touch_bottom_ui = 1;
+    options->vita_cursor_style = 0;
+    options->vita_cursor_sensitivity = 14;
+    options->vita_stick_deadzone = 37;
 
     /* display */
     options->lowmem = 0;
     options->interlace = 0;
     options->flicker = 1;
     options->fog_of_war = 1;
+    options->fps_60 = 1; // default 60 FPS mode
     options->ran_target_fps = 10;
     options->display_fps = 0;
     options->number_commas = 1;
     options->show_roofs = 1;
     options->remaining_experience = 1;
     options->total_experience = 1;
-    options->experience_drops = 0;
+    // on by default
+    options->experience_drops = 1;
+    // on by default; only draws while xp drops are active
+    options->xp_counter = 1;
+    options->xp_counter_details = 0;
     options->inventory_count = 0;
     options->condense_item_amounts = 1;
     options->certificate_items = 0;
@@ -136,12 +160,18 @@ void options_set_vanilla(Options *options) {
     options->version_sounds = VERSION_SOUNDS;
     options->version_textures = VERSION_TEXTURES;
     options->fatigue = 1;
-    options->max_quests = 50;
+    // 52 = authentic 50 + 2 custom quests (Rune Mysteries, Peeling the Onion)
+    options->max_quests = 52;
     options->max_skills = 18;
     options->registration = 0;
     options->idle_logout = 1;
-    options->remember_username = 0;
+    options->remember_username = 1;
+    options->spnet_adhoc = 0;
+#ifdef __vita__
+    options->remember_password = 1;
+#else
     options->remember_password = 0;
+#endif
     options->diversify_npcs = 0;
     options->rename_herblaw_items = 0;
 
@@ -153,6 +183,7 @@ void options_set_vanilla(Options *options) {
     options->zoom_camera = 0;
     options->tab_respond = 0;
     options->option_numbers = 0;
+    options->keyboard_shortcuts = 0;
     options->compass_menu = 0;
     options->transaction_menus = 0;
     options->offer_x = 0;
@@ -161,14 +192,20 @@ void options_set_vanilla(Options *options) {
     options->combat_style_always = 0;
     options->hold_to_buy = 0;
     options->touch_vertical_drag = 33;
+    options->touch_horizontal_drag = 75;
     options->touch_pinch = 50;
     options->touch_menu_delay = 350;
+    options->touch_bottom_ui = 1;
+    options->vita_cursor_style = 0;
+    options->vita_cursor_sensitivity = 14;
+    options->vita_stick_deadzone = 37;
 
     /* display */
     options->lowmem = 0;
     options->interlace = 0;
     options->flicker = 1;
     options->fog_of_war = 1;
+    options->fps_60 = 1; // default 60 FPS mode
     options->ran_target_fps = 50;
     options->display_fps = 0;
     options->number_commas = 0;
@@ -176,6 +213,8 @@ void options_set_vanilla(Options *options) {
     options->remaining_experience = 0;
     options->total_experience = 0;
     options->experience_drops = 0;
+    options->xp_counter = 0;
+    options->xp_counter_details = 0;
     options->inventory_count = 0;
     options->condense_item_amounts = 0;
     options->certificate_items = 0;
@@ -246,6 +285,7 @@ void options_save(Options *options) {
             options->registration,          //
             options->idle_logout,           //
             options->remember_username,     //
+            options->spnet_adhoc,           //
             options->remember_password,     //
             options->username,              //
             options->password,              //
@@ -258,6 +298,7 @@ void options_save(Options *options) {
             options->zoom_camera,           //
             options->tab_respond,           //
             options->option_numbers,        //
+            options->keyboard_shortcuts,    //
             options->compass_menu,          //
             options->transaction_menus,     //
             options->offer_x,               //
@@ -266,13 +307,16 @@ void options_save(Options *options) {
             options->combat_style_always,   //
             options->hold_to_buy,           //
             options->touch_vertical_drag,   //
+            options->touch_horizontal_drag, //
             options->touch_pinch,           //
             options->touch_menu_delay,      //
+            options->touch_bottom_ui,       //
                                             //
             options->lowmem,                //
             options->interlace,             //
             options->flicker,               //
             options->fog_of_war,            //
+            options->fps_60,                //
             options->ran_target_fps,        //
             options->display_fps,           //
             options->ui_scale,              //
@@ -283,6 +327,8 @@ void options_save(Options *options) {
             options->remaining_experience,  //
             options->total_experience,      //
             options->experience_drops,      //
+            options->xp_counter,            //
+            options->xp_counter_details,    //
             options->inventory_count,       //
             options->condense_item_amounts, //
             options->certificate_items,     //
@@ -302,7 +348,10 @@ void options_save(Options *options) {
             options->bank_scroll,           //
             options->bank_menus,            //
             options->bank_inventory,        //
-            options->bank_maintain_slot     //
+            options->bank_maintain_slot,    //
+            options->vita_cursor_style,       //
+            options->vita_cursor_sensitivity, //
+            options->vita_stick_deadzone      //
     );
 
 #ifdef ANDROID
@@ -345,12 +394,13 @@ void options_load(Options *options) {
     OPTION_INI_INT("version_textures", options->version_textures, 0, 256);
     OPTION_INI_INT("version_sounds", options->version_sounds, 0, 256);
     OPTION_INI_INT("fatigue", options->fatigue, 0, 1);
-    OPTION_INI_INT("last_world", options->last_world, 0, 256);
-    OPTION_INI_INT("max_quests", options->max_quests, 0, 50);
+    OPTION_INI_INT("last_world", options->last_world, 0, 2000);
+    OPTION_INI_INT("max_quests", options->max_quests, 0, 52);
     OPTION_INI_INT("max_skills", options->max_skills, 0, 18);
     OPTION_INI_INT("registration", options->registration, 0, 1);
     OPTION_INI_INT("idle_logout", options->idle_logout, 0, 1);
     OPTION_INI_INT("remember_username", options->remember_username, 0, 1);
+    OPTION_INI_INT("spnet_adhoc", options->spnet_adhoc, 0, 1);
     OPTION_INI_INT("remember_password", options->remember_password, 0, 1);
     OPTION_INI_STR("username", options->username, 20);
     OPTION_INI_STR("password", options->password, 20);
@@ -369,6 +419,7 @@ void options_load(Options *options) {
     OPTION_INI_INT("zoom_camera", options->zoom_camera, 0, 1);
     OPTION_INI_INT("tab_respond", options->tab_respond, 0, 1);
     OPTION_INI_INT("option_numbers", options->option_numbers, 0, 1);
+    OPTION_INI_INT("keyboard_shortcuts", options->keyboard_shortcuts, 0, 1);
     OPTION_INI_INT("compass_menu", options->compass_menu, 0, 1);
     OPTION_INI_INT("transaction_menus", options->transaction_menus, 0, 1);
     OPTION_INI_INT("offer_x", options->offer_x, 0, 1);
@@ -378,14 +429,22 @@ void options_load(Options *options) {
     OPTION_INI_INT("hold_to_buy", options->hold_to_buy, 0, 1);
     OPTION_INI_INT("touch_vertical_drag", options->touch_vertical_drag, -100,
                    100);
+    OPTION_INI_INT("touch_horizontal_drag", options->touch_horizontal_drag,
+                   -100, 100);
     OPTION_INI_INT("touch_pinch", options->touch_pinch, -100, 100);
     OPTION_INI_INT("touch_menu_delay", options->touch_menu_delay, 80, 2000);
+    OPTION_INI_INT("touch_bottom_ui", options->touch_bottom_ui, 0, 1);
+    OPTION_INI_INT("vita_cursor_style", options->vita_cursor_style, 0, 20);
+    OPTION_INI_INT("vita_cursor_sensitivity", options->vita_cursor_sensitivity, 4,
+                   40);
+    OPTION_INI_INT("vita_stick_deadzone", options->vita_stick_deadzone, 5, 60);
 
     /* display */
     OPTION_INI_INT("lowmem", options->lowmem, 0, 1);
     OPTION_INI_INT("interlace", options->interlace, 0, 1);
     OPTION_INI_INT("flicker", options->flicker, 0, 1);
     OPTION_INI_INT("fog_of_war", options->fog_of_war, 0, 1);
+    OPTION_INI_INT("fps_60", options->fps_60, 0, 1);
     OPTION_INI_INT("ran_target_fps", options->ran_target_fps, 0, 50);
     OPTION_INI_INT("display_fps", options->display_fps, 0, 1);
     OPTION_INI_INT("ui_scale", options->ui_scale, 0, 1);
@@ -396,6 +455,8 @@ void options_load(Options *options) {
     OPTION_INI_INT("remaining_experience", options->remaining_experience, 0, 1);
     OPTION_INI_INT("total_experience", options->total_experience, 0, 1);
     OPTION_INI_INT("experience_drops", options->experience_drops, 0, 1);
+    OPTION_INI_INT("xp_counter", options->xp_counter, 0, 1);
+    OPTION_INI_INT("xp_counter_details", options->xp_counter_details, 0, 1);
     OPTION_INI_INT("inventory_count", options->inventory_count, 0, 1);
     OPTION_INI_INT("condense_item_amounts", options->condense_item_amounts, 0,
                    1);

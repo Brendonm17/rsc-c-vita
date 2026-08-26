@@ -120,8 +120,15 @@ void mudclient_draw_status_bars(mudclient *mud) {
     x = is_touch ? 86 : mud->surface->width - 2;
     y = is_touch ? 108 + (combat_button_height * 5) + 15 : 48;
 
-    /* Display drained / boosted skills */
-    for (int i = 0; i < PLAYER_SKILL_COUNT; ++i) {
+    // displays drained/boosted skills, bound by the server's skill count
+    int drained_skill_count = mud->player_skill_count;
+
+    // caps at skill_names' real size to avoid an oob name read
+    if (drained_skill_count > SKILL_NAMES_COUNT) {
+        drained_skill_count = SKILL_NAMES_COUNT;
+    }
+
+    for (int i = 0; i < drained_skill_count; ++i) {
         if (i == SKILL_PRAYER || i == SKILL_HITS) {
             continue;
         }

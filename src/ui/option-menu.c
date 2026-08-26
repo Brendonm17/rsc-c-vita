@@ -48,7 +48,17 @@ void mudclient_draw_option_menu(mudclient *mud) {
             sprintf(entry, "(%c) %s", _3ds_option_buttons[i],
                     mud->option_menu_entry[i]);
 #else
-            char *entry = mud->option_menu_entry[i];
+            // keeps clickable width in sync with the drawn "(N)" prefix
+            char numbered_entry[strlen(mud->option_menu_entry[i]) + 6];
+
+            if (mudclient_option_numbers_level(mud) > 1 && i < 5) {
+                sprintf(numbered_entry, "(%d) %s", i + 1,
+                        mud->option_menu_entry[i]);
+            } else {
+                strcpy(numbered_entry, mud->option_menu_entry[i]);
+            }
+
+            char *entry = numbered_entry;
 #endif
 
             if (mud->mouse_x < ui_x - 6 ||
@@ -79,7 +89,17 @@ void mudclient_draw_option_menu(mudclient *mud) {
         sprintf(entry, "(%c) %s", _3ds_option_buttons[i],
                 mud->option_menu_entry[i]);
 #else
-        char *entry = mud->option_menu_entry[i];
+        // prefixes each option with its "(N)" hotkey; server-driven online, see mudclient_option_numbers_level
+        char numbered_entry[strlen(mud->option_menu_entry[i]) + 6];
+
+        if (mudclient_option_numbers_level(mud) > 1 && i < 5) {
+            sprintf(numbered_entry, "(%d) %s", i + 1,
+                    mud->option_menu_entry[i]);
+        } else {
+            strcpy(numbered_entry, mud->option_menu_entry[i]);
+        }
+
+        char *entry = numbered_entry;
 #endif
 
         if (mud->mouse_x > ui_x - 6 &&
@@ -89,8 +109,14 @@ void mudclient_draw_option_menu(mudclient *mud) {
             text_colour = RED;
         }
 
-        surface_draw_string(mud->surface, entry, ui_x,
-                            ui_y + (font_height + i * font_height), font_style,
+        int baseline_y = ui_y + (font_height + i * font_height);
+
+        if (is_touch) {
+            // center the glyphs in the 24px hit band
+            baseline_y -= 5;
+        }
+
+        surface_draw_string(mud->surface, entry, ui_x, baseline_y, font_style,
                             text_colour);
     }
 }

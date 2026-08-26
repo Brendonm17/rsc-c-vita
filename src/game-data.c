@@ -474,3 +474,144 @@ void game_data_load_data(int8_t *buffer, int is_members, int version) {
     free(game_data.data_string);
     free(game_data.data_integer);
 }
+
+static int item_note_applies(int id, int noted) {
+    if (!noted || id < 0 || id >= game_data.item_count) {
+        return 0;
+    }
+
+    return game_data.items[id].has_note_type;
+}
+
+void game_data_item_note_name(int id, int noted, int cert_as_notes, char *out,
+                              int out_size) {
+    if (out == NULL || out_size <= 0) {
+        return;
+    }
+
+    out[0] = '\0';
+
+    if (id < 0 || id >= game_data.item_count) {
+        return;
+    }
+
+    const char *base = game_data.items[id].name;
+
+    if (base == NULL) {
+        return;
+    }
+
+    if (!item_note_applies(id, noted) || cert_as_notes) {
+        // plain item name kept when cert-as-notes is off or item has no noted form
+        snprintf(out, out_size, "%s", base);
+        return;
+    }
+
+    snprintf(out, out_size, "%s Certificate", base);
+}
+
+const char *game_data_item_note_description(int id, int noted,
+                                            int cert_as_notes) {
+    if (!item_note_applies(id, noted)) {
+        if (id < 0 || id >= game_data.item_count) {
+            return "";
+        }
+
+        return game_data.items[id].description;
+    }
+
+    if (cert_as_notes) {
+        return "Swap this note at any bank for the equivalent item.";
+    }
+
+    return "Each certificate exchangable at any bank for the equivalent item";
+}
+
+int game_data_item_stacks(int id, int noted) {
+    if (id < 0 || id >= game_data.item_count) {
+        return 0;
+    }
+
+    if (item_note_applies(id, noted)) {
+        return 1; // asNote() hard-codes stackable = true
+    }
+
+    // jag polarity: the config85 byte is the INVERSE of the boolean
+    return game_data.items[id].stackable == 0;
+}
+
+int game_data_item_command_count(int id) {
+    if (id < 0 || id >= game_data.item_count) {
+        return 0;
+    }
+
+    const char *command = game_data.items[id].command;
+
+    if (command == NULL || command[0] == '\0') {
+        return 0;
+    }
+
+    int count = 1;
+
+    for (const char *c = command; *c != '\0'; c++) {
+        if (*c == ',') {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+int game_data_item_command_at(int id, int index, char *out, int out_size) {
+    if (out == NULL || out_size <= 0) {
+        return 0;
+    }
+
+    out[0] = '\0';
+
+    if (id < 0 || id >= game_data.item_count || index < 0) {
+        return 0;
+    }
+
+    const char *command = game_data.items[id].command;
+
+    if (command == NULL || command[0] == '\0') {
+        return 0;
+    }
+
+    const char *start = command;
+
+    for (int i = 0; i < index; i++) {
+        const char *comma = strchr(start, ',');
+
+        if (comma == NULL) {
+            return 0;
+        }
+
+        start = comma + 1;
+    }
+
+    const char *end = strchr(start, ',');
+    int length = end != NULL ? (int)(end - start) : (int)strlen(start);
+
+    if (length > out_size - 1) {
+        length = out_size - 1;
+    }
+
+    memcpy(out, start, length);
+    out[length] = '\0';
+
+    return length;
+}
+
+int game_data_item_wieldable(int id, int noted) {
+    if (id < 0 || id >= game_data.item_count) {
+        return 0;
+    }
+
+    if (item_note_applies(id, noted)) {
+        return 0; // asNote() hard-codes wieldable = false
+    }
+
+    return game_data.items[id].wearable != 0;
+}

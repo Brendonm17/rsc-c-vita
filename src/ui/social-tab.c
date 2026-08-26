@@ -1,6 +1,43 @@
 #include "social-tab.h"
 
-static const char *social_tabs[] = {"Friends", "Ignore"};
+#ifndef REVISION_177
+void mudclient_orsc_send_clan_action(mudclient *mud, int action,
+                                     const char *str1, const char *str2) {
+    packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+    packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_CLAN);
+    packet_stream_put_byte(mud->packet_stream, action);
+
+    // custom clan packet: create reads name+tag, invite/kick read a name
+    if (str1 != NULL) {
+        packet_stream_put_string_newline(mud->packet_stream, (char *)str1);
+    }
+
+    if (str2 != NULL) {
+        packet_stream_put_string_newline(mud->packet_stream, (char *)str2);
+    }
+
+    packet_stream_send_packet(mud->packet_stream);
+}
+
+void mudclient_orsc_send_party_action(mudclient *mud, int action,
+                                      const char *str1) {
+    packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
+    packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_PARTY);
+    packet_stream_put_byte(mud->packet_stream, action);
+
+    if (str1 != NULL) {
+        packet_stream_put_string_newline(mud->packet_stream, (char *)str1);
+    }
+
+    // invite reads player+name+tag; name/tag are sent empty
+    if (action == PARTY_OPTION_INVITE_PLAYER_OR_MAKE) {
+        packet_stream_put_string_newline(mud->packet_stream, "");
+        packet_stream_put_string_newline(mud->packet_stream, "");
+    }
+
+    packet_stream_send_packet(mud->packet_stream);
+}
+#endif
 
 void mudclient_sort_friends(mudclient *mud) {
     int flag = 1;
@@ -9,8 +46,8 @@ void mudclient_sort_friends(mudclient *mud) {
         flag = 0;
 
         for (int i = 0; i < mud->friend_list_count - 1; i++) {
-            if ((mud->friend_list_online[i] != FRIEND_ONLINE &&
-                 mud->friend_list_online[i + 1] == FRIEND_ONLINE) ||
+            if ((mud->friend_list_online[i] != MUD_FRIEND_ONLINE(mud) &&
+                 mud->friend_list_online[i + 1] == MUD_FRIEND_ONLINE(mud)) ||
                 (mud->friend_list_online[i] == 0 &&
                  mud->friend_list_online[i + 1] != 0)) {
                 int online_status = mud->friend_list_online[i];
@@ -30,9 +67,16 @@ void mudclient_sort_friends(mudclient *mud) {
 void mudclient_add_friend(mudclient *mud, char *username) {
     int64_t encoded_username = encode_username(username);
 
-    packet_stream_new_packet(mud->packet_stream, CLIENT_FRIEND_ADD);
-    packet_stream_put_long(mud->packet_stream, encoded_username);
-    packet_stream_send_packet(mud->packet_stream);
+#ifndef REVISION_177
+    if (mud->protocol_custom) {
+        mudclient_send_social_custom(mud, CLIENT_FRIEND_ADD, username);
+    } else
+#endif
+    {
+        packet_stream_new_packet(mud->packet_stream, CLIENT_FRIEND_ADD);
+        packet_stream_put_long(mud->packet_stream, encoded_username);
+        packet_stream_send_packet(mud->packet_stream);
+    }
 
     for (int i = 0; i < mud->friend_list_count; i++) {
         if (mud->friend_list[i] == encoded_username) {
@@ -50,9 +94,19 @@ void mudclient_add_friend(mudclient *mud, char *username) {
 }
 
 void mudclient_remove_friend(mudclient *mud, int64_t encoded_username) {
-    packet_stream_new_packet(mud->packet_stream, CLIENT_FRIEND_REMOVE);
-    packet_stream_put_long(mud->packet_stream, encoded_username);
-    packet_stream_send_packet(mud->packet_stream);
+#ifndef REVISION_177
+    if (mud->protocol_custom) {
+        // custom friend-remove takes a name string, not a base37 long
+        char name[USERNAME_LENGTH + 1] = {0};
+        decode_username(encoded_username, name);
+        mudclient_send_social_custom(mud, CLIENT_FRIEND_REMOVE, name);
+    } else
+#endif
+    {
+        packet_stream_new_packet(mud->packet_stream, CLIENT_FRIEND_REMOVE);
+        packet_stream_put_long(mud->packet_stream, encoded_username);
+        packet_stream_send_packet(mud->packet_stream);
+    }
 
     for (int i = 0; i < mud->friend_list_count; i++) {
         if (mud->friend_list[i] != encoded_username) {
@@ -83,9 +137,16 @@ void mudclient_remove_friend(mudclient *mud, int64_t encoded_username) {
 void mudclient_add_ignore(mudclient *mud, char *username) {
     int64_t encoded_username = encode_username(username);
 
-    packet_stream_new_packet(mud->packet_stream, CLIENT_IGNORE_ADD);
-    packet_stream_put_long(mud->packet_stream, encoded_username);
-    packet_stream_send_packet(mud->packet_stream);
+#ifndef REVISION_177
+    if (mud->protocol_custom) {
+        mudclient_send_social_custom(mud, CLIENT_IGNORE_ADD, username);
+    } else
+#endif
+    {
+        packet_stream_new_packet(mud->packet_stream, CLIENT_IGNORE_ADD);
+        packet_stream_put_long(mud->packet_stream, encoded_username);
+        packet_stream_send_packet(mud->packet_stream);
+    }
 
     for (int i = 0; i < mud->ignore_list_count; i++) {
         if (mud->ignore_list[i] == encoded_username) {
@@ -101,9 +162,19 @@ void mudclient_add_ignore(mudclient *mud, char *username) {
 }
 
 void mudclient_remove_ignore(mudclient *mud, int64_t encoded_username) {
-    packet_stream_new_packet(mud->packet_stream, CLIENT_IGNORE_REMOVE);
-    packet_stream_put_long(mud->packet_stream, encoded_username);
-    packet_stream_send_packet(mud->packet_stream);
+#ifndef REVISION_177
+    if (mud->protocol_custom) {
+        // custom ignore-remove takes a name string, not a base37 long
+        char name[USERNAME_LENGTH + 1] = {0};
+        decode_username(encoded_username, name);
+        mudclient_send_social_custom(mud, CLIENT_IGNORE_REMOVE, name);
+    } else
+#endif
+    {
+        packet_stream_new_packet(mud->packet_stream, CLIENT_IGNORE_REMOVE);
+        packet_stream_put_long(mud->packet_stream, encoded_username);
+        packet_stream_send_packet(mud->packet_stream);
+    }
 
     for (int i = 0; i < mud->ignore_list_count; i++) {
         if (mud->ignore_list[i] != encoded_username) {
@@ -127,6 +198,49 @@ void mudclient_send_private_message(mudclient *mud, int64_t username,
     packet_stream_put_bytes(mud->packet_stream, message, 0, length);
     packet_stream_send_packet(mud->packet_stream);
 }
+
+#ifndef REVISION_177
+// custom private message: name string + smart-length rs2-huffman body
+void mudclient_send_private_message_custom(mudclient *mud, const char *username,
+                                           const char *message) {
+    int length = (int)strlen(message);
+
+    if (length > ORSC_HUFFMAN_MAX_CHARS) {
+        length = ORSC_HUFFMAN_MAX_CHARS;
+    }
+
+    uint8_t body[ORSC_HUFFMAN_MAX_CHARS * 4];
+
+    int body_length =
+        orsc_huffman_encode(message, length, body, (int)sizeof(body));
+
+    if (body_length < 0) {
+        return;
+    }
+
+    packet_stream_new_packet(mud->packet_stream, CLIENT_PM);
+    packet_stream_put_string(mud->packet_stream, (char *)username);
+    packet_stream_put_byte(mud->packet_stream, '\n');
+
+    if (length < 128) {
+        packet_stream_put_byte(mud->packet_stream, length);
+    } else {
+        packet_stream_put_short(mud->packet_stream, length + 32768);
+    }
+
+    packet_stream_put_bytes(mud->packet_stream, (int8_t *)body, 0, body_length);
+    packet_stream_send_packet(mud->packet_stream);
+}
+
+// custom friend/ignore add-remove all take a name string
+void mudclient_send_social_custom(mudclient *mud, int opcode,
+                                  const char *username) {
+    packet_stream_new_packet(mud->packet_stream, opcode);
+    packet_stream_put_string(mud->packet_stream, (char *)username);
+    packet_stream_put_byte(mud->packet_stream, '\n');
+    packet_stream_send_packet(mud->packet_stream);
+}
+#endif
 
 void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
     int ui_x = mud->surface->width - SOCIAL_WIDTH - 3;
@@ -167,8 +281,33 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
     surface_draw_line_horizontal(mud->surface, ui_x, ui_y + height - 16,
                                  SOCIAL_WIDTH, BLACK);
 
+    // resolves clan/party sub-tab indexes; -1 if absent
+    const char *social_tab_names[4] = {"Friends", "Ignore", NULL, NULL};
+    int social_tab_count = 2;
+    int clan_tab_index = -1;
+    int party_tab_index = -1;
+
+#ifndef REVISION_177
+    if (mud->protocol_custom && mud->orsc.want_clans) {
+        clan_tab_index = social_tab_count;
+        social_tab_names[social_tab_count++] = "Clan";
+    }
+
+    // parties also exist on the SP co-op wire
+    if ((mud->protocol_custom && mud->orsc.want_parties) ||
+        MUD_SP_WIRE(mud)) {
+        party_tab_index = social_tab_count;
+        social_tab_names[social_tab_count++] = "Party";
+    }
+#endif
+
+    if (mud->ui_tab_social_sub_tab >= social_tab_count) {
+        mud->ui_tab_social_sub_tab = 0;
+    }
+
     surface_draw_tabs(mud->surface, ui_x, ui_y, SOCIAL_WIDTH, SOCIAL_TAB_HEIGHT,
-                      social_tabs, 2, mud->ui_tab_social_sub_tab);
+                      social_tab_names, social_tab_count,
+                      mud->ui_tab_social_sub_tab);
 
     panel_clear_list(mud->panel_social_list, mud->control_list_social);
 
@@ -176,7 +315,7 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
         for (int i = 0; i < mud->friend_list_count; i++) {
             char colour[6] = "@red@";
 
-            if (mud->friend_list_online[i] == FRIEND_ONLINE) {
+            if (mud->friend_list_online[i] == MUD_FRIEND_ONLINE(mud)) {
                 strcpy(colour, "@gre@");
             } else if (mud->friend_list_online[i] > 0) {
                 strcpy(colour, "@yel@");
@@ -209,6 +348,88 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
                                  formatted_username);
         }
     }
+#ifndef REVISION_177
+    else if (mud->ui_tab_social_sub_tab == clan_tab_index &&
+             mud->orsc_clan_in) {
+        for (int i = 0; i < mud->orsc_clan_size; i++) {
+            // leader gold, online members green, offline red
+            int is_this_leader =
+                strcmp(mud->orsc_clan_member_names[i],
+                       mud->orsc_clan_leader) == 0;
+
+            char *colour = is_this_leader
+                               ? "@yel@"
+                               : (mud->orsc_clan_member_online[i] ? "@gre@"
+                                                                  : "@red@");
+
+            char formatted_member[80] = {0};
+
+            if (mud->orsc_clan_is_leader && !is_this_leader) {
+                sprintf(formatted_member, "%s%s~%d~@whi@Kick", colour,
+                        mud->orsc_clan_member_names[i], ui_x + 126);
+            } else {
+                sprintf(formatted_member, "%s%s", colour,
+                        mud->orsc_clan_member_names[i]);
+            }
+
+            panel_add_list_entry(mud->panel_social_list,
+                                 mud->control_list_social, i,
+                                 formatted_member);
+        }
+    } else if (mud->ui_tab_social_sub_tab == clan_tab_index &&
+               !mud->orsc_clan_in && mud->orsc_clan_browse_count > 0) {
+        // clan browse results with their join-setting colours
+        for (int i = 0; i < mud->orsc_clan_browse_count; i++) {
+            char *colour = mud->orsc_clan_browse_can_join[i] == 0
+                               ? "@gr2@"
+                               : (mud->orsc_clan_browse_can_join[i] == 1
+                                      ? "@yel@"
+                                      : "@red@");
+
+            char formatted_clan[96] = {0};
+
+            sprintf(formatted_clan, "%s%s (%s) - %d", colour,
+                    mud->orsc_clan_browse_names[i],
+                    mud->orsc_clan_browse_tags[i],
+                    mud->orsc_clan_browse_members[i]);
+
+            panel_add_list_entry(mud->panel_social_list,
+                                 mud->control_list_social, i, formatted_clan);
+        }
+    } else if (mud->ui_tab_social_sub_tab == party_tab_index &&
+               mud->orsc_party_in) {
+        for (int i = 0; i < mud->orsc_party_size; i++) {
+            int is_this_leader =
+                strcmp(mud->orsc_party_member_names[i],
+                       mud->orsc_party_leader) == 0;
+
+            char *colour =
+                is_this_leader
+                    ? "@yel@"
+                    : (mud->orsc_party_member_online[i] ? "@gre@" : "@red@");
+
+            char formatted_member[96] = {0};
+
+            // the snapshot carries live hits + combat level per member
+            if (mud->orsc_party_is_leader && !is_this_leader) {
+                sprintf(formatted_member, "%s%s (%d/%d)~%d~@whi@Kick", colour,
+                        mud->orsc_party_member_names[i],
+                        mud->orsc_party_member_cur_hits[i],
+                        mud->orsc_party_member_max_hits[i], ui_x + 126);
+            } else {
+                sprintf(formatted_member, "%s%s (%d/%d) L%d", colour,
+                        mud->orsc_party_member_names[i],
+                        mud->orsc_party_member_cur_hits[i],
+                        mud->orsc_party_member_max_hits[i],
+                        mud->orsc_party_member_combat[i]);
+            }
+
+            panel_add_list_entry(mud->panel_social_list,
+                                 mud->control_list_social, i,
+                                 formatted_member);
+        }
+    }
+#endif
 
     int mouse_x = mud->mouse_x - ui_x;
     int mouse_y = mud->mouse_y - ui_y;
@@ -249,14 +470,18 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
 
             if (mud->mouse_x > ui_x + 116) {
                 sprintf(formatted, "%s to remove %s", activate_verb, username);
-            } else if (mud->friend_list_online[friend_index] == FRIEND_ONLINE) {
+            } else if (mud->friend_list_online[friend_index] ==
+                       MUD_FRIEND_ONLINE(mud)) {
                 sprintf(formatted, "%s to message %s", activate_verb, username);
             } else if (mud->friend_list_online[friend_index] > 0) {
 #ifdef REVISION_177
                 sprintf(formatted, "%s is on world %d", username,
                         mud->friend_list_online[friend_index]);
 #else
-                if (mud->friend_list_online[friend_index] < 200) {
+                if (mud->protocol177) {
+                    sprintf(formatted, "%s is on world %d", username,
+                            mud->friend_list_online[friend_index]);
+                } else if (mud->friend_list_online[friend_index] < 200) {
                     sprintf(formatted, "%s is on world %d", username,
                             mud->friend_list_online[friend_index] - 9);
                 } else {
@@ -317,6 +542,91 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
             mud->surface, ui_x + (SOCIAL_WIDTH / 2), ui_y + height - 3,
             FONT_BOLD_12, text_colour, "%s here to add a name", activate_verb);
     }
+#ifndef REVISION_177
+    else if (mud->ui_tab_social_sub_tab == clan_tab_index ||
+             mud->ui_tab_social_sub_tab == party_tab_index) {
+        int is_clan = mud->ui_tab_social_sub_tab == clan_tab_index;
+        int in_group = is_clan ? mud->orsc_clan_in : mud->orsc_party_in;
+        int is_leader =
+            is_clan ? mud->orsc_clan_is_leader : mud->orsc_party_is_leader;
+
+        if (in_group) {
+            if (is_clan) {
+                snprintf(formatted, SURFACE_STRING_MAX, "%s (%s)",
+                         mud->orsc_clan_name, mud->orsc_clan_tag);
+            } else {
+                snprintf(formatted, SURFACE_STRING_MAX, "%s's party",
+                         mud->orsc_party_leader);
+            }
+
+            // explicit Leave zone: the right 48px of the status line
+            int leave_colour =
+                mud->mouse_x > ui_x + SOCIAL_WIDTH - 48 &&
+                        mud->mouse_x < ui_x + SOCIAL_WIDTH &&
+                        mud->mouse_y > ui_y + 25 && mud->mouse_y < ui_y + 40
+                    ? YELLOW
+                    : RED;
+
+            surface_draw_string(mud->surface, "Leave",
+                                ui_x + SOCIAL_WIDTH - 44, ui_y + 35,
+                                FONT_BOLD_12, leave_colour);
+        } else {
+            snprintf(formatted, SURFACE_STRING_MAX, "You are not in a %s",
+                     is_clan ? "clan" : "party");
+
+            // clanless: find zone requests the browse list, click to join
+            if (is_clan) {
+                int find_colour =
+                    mud->mouse_x > ui_x + SOCIAL_WIDTH - 48 &&
+                            mud->mouse_x < ui_x + SOCIAL_WIDTH &&
+                            mud->mouse_y > ui_y + 25 && mud->mouse_y < ui_y + 40
+                        ? YELLOW
+                        : GREEN;
+
+                surface_draw_string(mud->surface, "Find",
+                                    ui_x + SOCIAL_WIDTH - 40, ui_y + 35,
+                                    FONT_BOLD_12, find_colour);
+            }
+        }
+
+        surface_draw_string_centre(
+            mud->surface, formatted,
+            ui_x + (in_group || is_clan ? (SOCIAL_WIDTH - 48) / 2
+                                        : SOCIAL_WIDTH / 2),
+            ui_y + 35, FONT_BOLD_12, WHITE);
+
+        int text_colour = WHITE;
+
+        if (mud->mouse_x > ui_x && mud->mouse_x < ui_x + SOCIAL_WIDTH &&
+            mud->mouse_y > ui_y + height - 16 && mud->mouse_y < ui_y + height) {
+            text_colour = YELLOW;
+        }
+
+        if (is_clan && !in_group) {
+            surface_draw_stringf_centre(mud->surface,
+                                        ui_x + (SOCIAL_WIDTH / 2),
+                                        ui_y + height - 3, FONT_BOLD_12,
+                                        text_colour,
+                                        "%s here to create a clan",
+                                        activate_verb);
+        } else if (!is_clan && !in_group) {
+            // inviting is what creates a party (INVITE_PLAYER_OR_MAKE)
+            surface_draw_stringf_centre(mud->surface,
+                                        ui_x + (SOCIAL_WIDTH / 2),
+                                        ui_y + height - 3, FONT_BOLD_12,
+                                        text_colour,
+                                        "%s here to start a party",
+                                        activate_verb);
+        } else if (is_leader) {
+            surface_draw_stringf_centre(mud->surface,
+                                        ui_x + (SOCIAL_WIDTH / 2),
+                                        ui_y + height - 3, FONT_BOLD_12,
+                                        text_colour,
+                                        "%s here to invite a player",
+                                        activate_verb);
+        }
+    }
+#endif
 
     if (!no_menus) {
         return;
@@ -337,13 +647,16 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
     }
 
     if (mouse_y <= SOCIAL_TAB_HEIGHT && mud->mouse_button_click == 1) {
-        if (mouse_x < (SOCIAL_WIDTH / 2) && mud->ui_tab_social_sub_tab == 1) {
-            mud->ui_tab_social_sub_tab = 0;
-            panel_reset_list(mud->panel_social_list, mud->control_list_social);
-        } else if (mouse_x > (SOCIAL_WIDTH / 2) &&
-                   mud->ui_tab_social_sub_tab == 0) {
-            mud->ui_tab_social_sub_tab = 1;
+        int clicked_tab = mouse_x * social_tab_count / SOCIAL_WIDTH;
 
+        if (clicked_tab < 0) {
+            clicked_tab = 0;
+        } else if (clicked_tab >= social_tab_count) {
+            clicked_tab = social_tab_count - 1;
+        }
+
+        if (clicked_tab != mud->ui_tab_social_sub_tab) {
+            mud->ui_tab_social_sub_tab = clicked_tab;
             panel_reset_list(mud->panel_social_list, mud->control_list_social);
         }
     }
@@ -375,6 +688,178 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
         }
     }
 
+#ifndef REVISION_177
+    // leader admin via right-click menus
+    if (mud->ui_tab_social_sub_tab == clan_tab_index && mud->orsc_clan_in &&
+        mud->orsc_clan_is_leader) {
+        int member_index = panel_get_list_entry_index(mud->panel_social_list,
+                                                      mud->control_list_social);
+
+        if (member_index >= 0 && member_index < mud->orsc_clan_size &&
+            mouse_x < 116 &&
+            strcmp(mud->orsc_clan_member_names[member_index],
+                   mud->orsc_clan_leader) != 0) {
+            static const char *rank_actions[2] = {"Make General",
+                                                  "Make member"};
+            static const int rank_values[2] = {2, 0};
+
+            for (int i = 0; i < 2; i++) {
+                strcpy(mud->menu_items[mud->menu_items_count].action_text,
+                       rank_actions[i]);
+                sprintf(mud->menu_items[mud->menu_items_count].target_text,
+                        "@whi@%s", mud->orsc_clan_member_names[member_index]);
+                mud->menu_items[mud->menu_items_count].type = MENU_CLAN_RANK;
+                mud->menu_items[mud->menu_items_count].index = member_index;
+                mud->menu_items[mud->menu_items_count].target_index =
+                    rank_values[i];
+                mud->menu_items_count++;
+            }
+
+            strcpy(mud->menu_items[mud->menu_items_count].action_text,
+                   "Give leadership");
+            sprintf(mud->menu_items[mud->menu_items_count].target_text,
+                    "@whi@%s", mud->orsc_clan_member_names[member_index]);
+            mud->menu_items[mud->menu_items_count].type =
+                MENU_CLAN_LEADERSHIP;
+            mud->menu_items[mud->menu_items_count].index = member_index;
+            mud->menu_items_count++;
+        }
+
+        // clan settings on the status line (the three select buttons)
+        if (mouse_y > 25 && mouse_y < 40 && mouse_x < SOCIAL_WIDTH - 48) {
+            static const char *setting_names[3] = {"Kick rank", "Invite rank",
+                                                   "Requests"};
+            static const char *setting_states[3][3] = {
+                {"Anyone", "Owner", "General+"},
+                {"Anyone", "Owner", "General+"},
+                {"Anyone can join", "Invite only", "Closed"}};
+
+            for (int mode = 0; mode < 3; mode++) {
+                for (int state = 0; state < 3; state++) {
+                    sprintf(mud->menu_items[mud->menu_items_count].action_text,
+                            "%s:", setting_names[mode]);
+                    sprintf(mud->menu_items[mud->menu_items_count].target_text,
+                            "@whi@%s", setting_states[mode][state]);
+                    mud->menu_items[mud->menu_items_count].type =
+                        MENU_CLAN_SETTING;
+                    mud->menu_items[mud->menu_items_count].index = mode;
+                    mud->menu_items[mud->menu_items_count].target_index =
+                        state;
+                    mud->menu_items_count++;
+                }
+            }
+        }
+    }
+
+    if (mud->protocol_custom && mud->ui_tab_social_sub_tab == party_tab_index &&
+        mud->orsc_party_in && mouse_y > 25 && mouse_y < 40 &&
+        mouse_x < SOCIAL_WIDTH - 48) {
+        // per-player share toggles shown first, available to every member
+        // (custom worlds only, the SP server has no share commands)
+        static const char *share_names[2] = {"Toggle loot share",
+                                             "Toggle XP share"};
+
+        for (int i = 0; i < 2; i++) {
+            strcpy(mud->menu_items[mud->menu_items_count].action_text,
+                   share_names[i]);
+            mud->menu_items[mud->menu_items_count].target_text[0] = '\0';
+            mud->menu_items[mud->menu_items_count].type = MENU_PARTY_SHARE;
+            mud->menu_items[mud->menu_items_count].index = i;
+            mud->menu_items_count++;
+        }
+
+        // party settings shown for the leader only
+        if (mud->orsc_party_is_leader) {
+            static const char *party_setting_names[2] = {"Kick rank",
+                                                         "Invite rank"};
+            static const char *party_setting_states[3] = {"Anyone", "Owner",
+                                                          "General+"};
+
+            for (int mode = 0; mode < 2; mode++) {
+                for (int state = 0; state < 3; state++) {
+                    sprintf(mud->menu_items[mud->menu_items_count].action_text,
+                            "%s:", party_setting_names[mode]);
+                    sprintf(mud->menu_items[mud->menu_items_count].target_text,
+                            "@whi@%s", party_setting_states[state]);
+                    mud->menu_items[mud->menu_items_count].type =
+                        MENU_PARTY_SETTING;
+                    mud->menu_items[mud->menu_items_count].index = mode;
+                    mud->menu_items[mud->menu_items_count].target_index =
+                        state;
+                    mud->menu_items_count++;
+                }
+            }
+        }
+    }
+
+    if (mud->mouse_button_click == 1 &&
+        mud->ui_tab_social_sub_tab == clan_tab_index && mud->orsc_clan_in) {
+        // leader kicking a member (the Kick zone mirrors friends' Remove)
+        if (mud->orsc_clan_is_leader) {
+            int member_index = panel_get_list_entry_index(
+                mud->panel_social_list, mud->control_list_social);
+
+            if (member_index >= 0 && member_index < mud->orsc_clan_size &&
+                mouse_x < 176 && mouse_x > 116 &&
+                strcmp(mud->orsc_clan_member_names[member_index],
+                       mud->orsc_clan_leader) != 0) {
+                mudclient_orsc_send_clan_action(
+                    mud, CLAN_OPTION_KICK_PLAYER,
+                    mud->orsc_clan_member_names[member_index], NULL);
+            }
+        }
+
+        // Leave zone on the status line
+        if (mouse_x > SOCIAL_WIDTH - 48 && mouse_y > 25 && mouse_y < 40) {
+            mudclient_orsc_send_clan_action(mud, CLAN_OPTION_LEAVE, NULL,
+                                            NULL);
+        }
+    }
+
+    if (mud->mouse_button_click == 1 &&
+        mud->ui_tab_social_sub_tab == clan_tab_index && !mud->orsc_clan_in) {
+        // Find zone requests the clan list
+        if (mouse_x > SOCIAL_WIDTH - 48 && mouse_y > 25 && mouse_y < 40) {
+            mudclient_orsc_send_clan_action(mud, CLAN_OPTION_SEND_CLAN_INFO,
+                                            NULL, NULL);
+        }
+
+        // clicking a browse row joins that clan by name
+        int browse_index = panel_get_list_entry_index(mud->panel_social_list,
+                                                      mud->control_list_social);
+
+        if (browse_index >= 0 &&
+            browse_index < mud->orsc_clan_browse_count && mouse_x < 176) {
+            char join_command[48] = {0};
+
+            snprintf(join_command, sizeof(join_command), "joinclan %s",
+                     mud->orsc_clan_browse_names[browse_index]);
+            mudclient_send_command_string(mud, join_command);
+        }
+    }
+
+    if (mud->mouse_button_click == 1 &&
+        mud->ui_tab_social_sub_tab == party_tab_index && mud->orsc_party_in) {
+        if (mud->orsc_party_is_leader) {
+            int member_index = panel_get_list_entry_index(
+                mud->panel_social_list, mud->control_list_social);
+
+            if (member_index >= 0 && member_index < mud->orsc_party_size &&
+                mouse_x < 176 && mouse_x > 116 &&
+                strcmp(mud->orsc_party_member_names[member_index],
+                       mud->orsc_party_leader) != 0) {
+                mudclient_orsc_send_party_action(
+                    mud, PARTY_OPTION_KICK_PLAYER,
+                    mud->orsc_party_member_names[member_index]);
+            }
+        }
+
+        if (mouse_x > SOCIAL_WIDTH - 48 && mouse_y > 25 && mouse_y < 40) {
+            mudclient_orsc_send_party_action(mud, PARTY_OPTION_LEAVE, NULL);
+        }
+    }
+#endif
+
     if (mouse_y > 166 && mud->mouse_button_click == 1) {
         memset(mud->input_text_current, '\0', INPUT_TEXT_LENGTH);
         memset(mud->input_text_final, '\0', INPUT_TEXT_LENGTH);
@@ -384,6 +869,20 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
         } else if (mud->ui_tab_social_sub_tab == 1) {
             mud->show_dialog_social_input = SOCIAL_ADD_IGNORE;
         }
+#ifndef REVISION_177
+        else if (mud->ui_tab_social_sub_tab == clan_tab_index) {
+            if (!mud->orsc_clan_in) {
+                mud->show_dialog_social_input = SOCIAL_CLAN_CREATE_NAME;
+            } else if (mud->orsc_clan_is_leader) {
+                mud->show_dialog_social_input = SOCIAL_CLAN_INVITE;
+            }
+        } else if (mud->ui_tab_social_sub_tab == party_tab_index) {
+            // one prompt for both flows: inviting creates the party
+            if (!mud->orsc_party_in || mud->orsc_party_is_leader) {
+                mud->show_dialog_social_input = SOCIAL_PARTY_INVITE;
+            }
+        }
+#endif
     }
 
     mud->mouse_button_click = 0;
@@ -500,8 +999,19 @@ void mudclient_draw_social_input(mudclient *mud) {
         if (message[0] != '\0') {
             int length = chat_message_encode(message);
 
-            mudclient_send_private_message(mud, mud->private_message_target,
-                                           chat_message_encoded, length);
+#ifndef REVISION_177
+            if (mud->protocol_custom) {
+                // custom private message keys the recipient by name, huffman body
+                char target[MAX_USER_LENGTH + 1] = {0};
+                decode_username(mud->private_message_target, target);
+
+                mudclient_send_private_message_custom(mud, target, message);
+            } else
+#endif
+            {
+                mudclient_send_private_message(mud, mud->private_message_target,
+                                               chat_message_encoded, length);
+            }
 
             char *decoded_message =
                 chat_message_decode(chat_message_encoded, 0, length);
@@ -513,10 +1023,14 @@ void mudclient_draw_social_input(mudclient *mud) {
             char formatted_message[USERNAME_LENGTH + strlen(decoded_message) +
                                    17];
 
-            sprintf(formatted_message, "@pri@You tell %s: %s", target_name,
-                    decoded_message);
+            // custom worlds echo sent PMs back (opcode 87) and only that renders, so a rejected send shows nothing;
+            // everywhere else the local echo is the only feedback
+            if (!mud->protocol_custom) {
+                sprintf(formatted_message, "@pri@You tell %s: %s", target_name,
+                        decoded_message);
 
-            mudclient_show_server_message(mud, formatted_message);
+                mudclient_show_server_message(mud, formatted_message);
+            }
 
             memset(mud->input_pm_current, '\0', INPUT_PM_LENGTH + 1);
             memset(mud->input_pm_final, '\0', INPUT_PM_LENGTH + 1);
@@ -552,6 +1066,109 @@ void mudclient_draw_social_input(mudclient *mud) {
         }
         break;
     }
+#ifndef REVISION_177
+    case SOCIAL_CLAN_CREATE_NAME: {
+        surface_draw_string_centre(mud->surface, "Enter a name for your clan",
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        dialog_y += 20;
+
+        surface_draw_string_centre(mud->surface, formatted_current,
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        char *clan_name = mud->input_text_final;
+
+        if (clan_name[0] != '\0') {
+            // step 1 of 2: stash the name, then prompt for the tag
+            snprintf(mud->orsc_clan_create_name,
+                     sizeof(mud->orsc_clan_create_name), "%s", clan_name);
+
+            memset(mud->input_text_current, '\0', INPUT_TEXT_LENGTH + 1);
+            memset(mud->input_text_final, '\0', INPUT_TEXT_LENGTH + 1);
+
+            mud->show_dialog_social_input = SOCIAL_CLAN_CREATE_TAG;
+        }
+        break;
+    }
+    case SOCIAL_CLAN_CREATE_TAG: {
+        surface_draw_string_centre(mud->surface, "Enter a short clan tag",
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        dialog_y += 20;
+
+        surface_draw_string_centre(mud->surface, formatted_current,
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        char *clan_tag = mud->input_text_final;
+
+        if (clan_tag[0] != '\0') {
+            mudclient_orsc_send_clan_action(mud, CLAN_OPTION_CREATE,
+                                            mud->orsc_clan_create_name,
+                                            clan_tag);
+
+            memset(mud->input_text_current, '\0', INPUT_TEXT_LENGTH + 1);
+            memset(mud->input_text_final, '\0', INPUT_TEXT_LENGTH + 1);
+
+            mud->show_dialog_social_input = 0;
+        }
+        break;
+    }
+    case SOCIAL_CLAN_INVITE: {
+        surface_draw_string_centre(mud->surface,
+                                   "Enter name to invite to your clan",
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        dialog_y += 20;
+
+        surface_draw_string_centre(mud->surface, formatted_current,
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        char *username = mud->input_text_final;
+
+        if (username[0] != '\0') {
+            mudclient_orsc_send_clan_action(mud, CLAN_OPTION_INVITE_PLAYER,
+                                            username, NULL);
+
+            memset(mud->input_text_current, '\0', INPUT_TEXT_LENGTH + 1);
+            memset(mud->input_text_final, '\0', INPUT_TEXT_LENGTH + 1);
+
+            mud->show_dialog_social_input = 0;
+        }
+        break;
+    }
+    case SOCIAL_PARTY_INVITE: {
+        surface_draw_string_centre(mud->surface,
+                                   "Enter name to invite to your party",
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        dialog_y += 20;
+
+        surface_draw_string_centre(mud->surface, formatted_current,
+                                   mud->surface->width / 2, dialog_y,
+                                   FONT_BOLD_14, WHITE);
+
+        char *username = mud->input_text_final;
+
+        if (username[0] != '\0') {
+            // INVITE_PLAYER_OR_MAKE: also creates the party when not in one
+            mudclient_orsc_send_party_action(
+                mud, PARTY_OPTION_INVITE_PLAYER_OR_MAKE, username);
+
+            memset(mud->input_text_current, '\0', INPUT_TEXT_LENGTH + 1);
+            memset(mud->input_text_final, '\0', INPUT_TEXT_LENGTH + 1);
+
+            mud->show_dialog_social_input = 0;
+        }
+        break;
+    }
+#endif
     }
 
     int text_colour = WHITE;
@@ -566,3 +1183,102 @@ void mudclient_draw_social_input(mudclient *mud) {
     surface_draw_string_centre(mud->surface, "Cancel", mud->surface->width / 2,
                                dialog_y + 23, FONT_BOLD_12, text_colour);
 }
+
+#ifndef REVISION_177
+// the always-on-screen party box: per member a name-level line, a 100x4 hp bar (green hidden for ~500 frames
+// after damage), skull and leader-crown icons, and a Party button opening the party view. fixed at the
+// reference position; the combat/damage icons are custom GUI sprites this port doesn't carry
+void mudclient_draw_party_hud(mudclient *mud) {
+    if ((!mud->protocol_custom && !MUD_SP_WIRE(mud)) || !mud->orsc_party_in ||
+        mud->orsc_party_size <= 0) {
+        return;
+    }
+
+    // the touch dialogue options render in the same left band; step aside while a conversation menu is up
+    if (mudclient_is_touch(mud) && mud->show_option_menu) {
+        return;
+    }
+
+    int x = (mud->surface->width - 175) / 20;
+
+#if defined(__vita__) && defined(RENDER_GL)
+    // the vita touch layout owns the top left (chat to ~120) and lower left (side menu from 300); the party
+    // box takes the free band between them, a full party ending ~250
+    int y = 150;
+#else
+    int y = mud->surface->height - 310;
+
+    if (y < 40) {
+        y = 40;
+    }
+#endif
+
+    int text_x = x - 20;
+
+    if (text_x < 2) {
+        text_x = 2;
+    }
+
+    // row 0's icons start at y - 6, so the button ends at y - 7
+    int button_x = x + 20;
+    int button_y = y - 22;
+
+    surface_draw_box_alpha(mud->surface, button_x, button_y, 75, 15, 0x454545,
+                           128);
+    surface_draw_border(mud->surface, button_x, button_y, 75, 15, WHITE);
+    surface_draw_string_centre(mud->surface, "Party", button_x + 37,
+                               button_y + 11, FONT_REGULAR_11, WHITE);
+
+    if (mud->mouse_button_click == 1 && mud->mouse_x >= button_x &&
+        mud->mouse_x <= button_x + 75 && mud->mouse_y >= button_y &&
+        mud->mouse_y <= button_y + 15) {
+        mud->show_ui_tab = SOCIAL_TAB;
+        // the Clan tab only precedes Party on custom worlds
+        mud->ui_tab_social_sub_tab =
+            2 + ((mud->protocol_custom && mud->orsc.want_clans) ? 1 : 0);
+        mud->mouse_button_click = 0;
+    }
+
+    for (int i = 0; i < mud->orsc_party_size; i++) {
+        int base_y = y + i * 20;
+
+        if (mud->orsc_party_member_flash[i] > 0) {
+            mud->orsc_party_member_flash[i]--;
+        }
+
+        surface_draw_stringf(mud->surface, text_x, base_y + 6, FONT_REGULAR_11,
+                             WHITE, "@yel@%s@whi@-%d",
+                             mud->orsc_party_member_names[i],
+                             mud->orsc_party_member_combat[i]);
+
+        if (mud->orsc_party_member_skull[i] > 0) {
+            surface_draw_sprite_scale(mud->surface, x + 58, base_y - 6, 14, 14,
+                                      mud->sprite_media + 13, 0);
+        }
+
+        if (mud->orsc_party_member_rank[i] == 1) {
+            // leader crown, packed as index+1 in the high byte
+            mudclient_draw_crown(mud, x + 71, base_y - 6, 2 << 24);
+        }
+
+        int max_hits = mud->orsc_party_member_max_hits[i];
+
+        surface_draw_box(mud->surface, text_x, base_y + 8, 100, 4, 0xFF0000);
+
+        if (max_hits > 0 && mud->orsc_party_member_flash[i] < 1) {
+            int missing = max_hits - mud->orsc_party_member_cur_hits[i];
+            int missing_width =
+                (int)((missing * 100.0 / max_hits) + 0.5);
+
+            if (missing_width < 0) {
+                missing_width = 0;
+            } else if (missing_width > 100) {
+                missing_width = 100;
+            }
+
+            surface_draw_box(mud->surface, text_x, base_y + 8,
+                             100 - missing_width, 4, 0x00FF00);
+        }
+    }
+}
+#endif

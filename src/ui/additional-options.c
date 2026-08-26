@@ -4,6 +4,119 @@
 
 const char *option_tabs[] = {"Game", "Controls", "UI", "Bank"};
 
+#if defined(__vita__)
+static int mudclient_add_option_panel_label(Panel *panel, char *label, int x,
+                                            int y);
+
+// "label < value >" arrow adjuster: VITA_ADJ_CURSOR cycles the cursor-style names; VITA_ADJ_INT steps a clamped
+// integer by `step`
+enum { VITA_ADJ_CURSOR, VITA_ADJ_INT };
+
+typedef struct {
+    Panel *panel;
+    int prev_control;
+    int next_control;
+    int value_control;
+    int *value;
+    int min;
+    int max;
+    int step;
+    int type;
+} VitaAdjuster;
+
+static VitaAdjuster vita_adjusters[6];
+static int vita_adjuster_count = 0;
+
+static void vita_adjuster_set_text(VitaAdjuster *a) {
+    char buf[24];
+
+    if (a->type == VITA_ADJ_CURSOR) {
+        snprintf(buf, sizeof(buf), "@whi@%s", vita_cursor_style_name(*a->value));
+    } else {
+        snprintf(buf, sizeof(buf), "@whi@%d", *a->value);
+    }
+
+    panel_update_text(a->panel, a->value_control, buf);
+}
+
+// add a "label < value >" adjuster row; value_px_w = width reserved for the value text
+static void vita_add_adjuster(Panel *panel, char *label, int *value, int min,
+                              int max, int step, int type, int value_px_w, int x,
+                              int y) {
+    if (vita_adjuster_count >=
+        (int)(sizeof(vita_adjusters) / sizeof(vita_adjusters[0]))) {
+        return;
+    }
+
+    int label_w = mudclient_add_option_panel_label(panel, label, x, y);
+    int px = x + label_w;
+
+    panel_add_button_background(panel, px + 7, y - 4, 14, 14);
+    panel_add_text_centre(panel, px + 7, y - 4, "@whi@<", FONT_BOLD_12, 0);
+    int prev = panel_add_button(panel, px + 7, y - 4, 14, 14);
+
+    int value_control = panel_add_text(panel, px + 18, y, "", FONT_BOLD_12, 0);
+
+    panel_add_button_background(panel, px + 18 + value_px_w, y - 4, 14, 14);
+    panel_add_text_centre(panel, px + 18 + value_px_w, y - 4, "@whi@>",
+                          FONT_BOLD_12, 0);
+    int next = panel_add_button(panel, px + 18 + value_px_w, y - 4, 14, 14);
+
+    VitaAdjuster *a = &vita_adjusters[vita_adjuster_count++];
+    a->panel = panel;
+    a->prev_control = prev;
+    a->next_control = next;
+    a->value_control = value_control;
+    a->value = value;
+    a->min = min;
+    a->max = max;
+    a->step = step;
+    a->type = type;
+
+    vita_adjuster_set_text(a);
+}
+
+// Process < / > clicks for the adjusters on the active options panel.
+static void vita_handle_adjusters(Panel *active) {
+    for (int i = 0; i < vita_adjuster_count; i++) {
+        VitaAdjuster *a = &vita_adjusters[i];
+
+        if (a->panel != active) {
+            continue;
+        }
+
+        int changed = 0;
+        int dir = 0;
+
+        if (panel_is_clicked(a->panel, a->prev_control)) {
+            dir = -1;
+        } else if (panel_is_clicked(a->panel, a->next_control)) {
+            dir = 1;
+        }
+
+        if (dir != 0) {
+            if (a->type == VITA_ADJ_CURSOR) {
+                int n = vita_cursor_style_count();
+                *a->value = (*a->value + dir + n) % n;
+            } else {
+                *a->value += dir * a->step;
+
+                if (*a->value < a->min) {
+                    *a->value = a->min;
+                } else if (*a->value > a->max) {
+                    *a->value = a->max;
+                }
+            }
+            changed = 1;
+        }
+
+        if (changed) {
+            vita_adjuster_set_text(a);
+        }
+    }
+}
+#endif
+
 static int mudclient_add_option_panel_label(Panel *panel, char *label, int x,
                                             int y);
 static int mudclient_add_option_panel_string(Panel *panel, char *label,
@@ -52,6 +165,10 @@ void mudclient_create_options_panel(mudclient *mud) {
         mud->ui_option_types[i] = -1;
         mud->bank_option_types[i] = -1;
     }
+
+#if defined(__vita__)
+    vita_adjuster_count = 0;
+#endif
 
     int ui_x = mud->surface->width / 2 - ADDITIONAL_OPTIONS_WIDTH / 2;
 
@@ -194,6 +311,15 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     y += OPTION_HORIZ_GAP;
 
+    control = mudclient_add_option_panel_checkbox(
+        mud->panel_game_options, "@whi@60 FPS (off = 30): ", mud->options->fps_60,
+        x, y);
+
+    mud->game_options[control] = &mud->options->fps_60;
+    mud->game_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+
+    y += OPTION_HORIZ_GAP;
+
     snprintf(formatted_digits, sizeof(formatted_digits), "%d",
              mud->options->field_of_view);
 
@@ -263,6 +389,15 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     control = mudclient_add_option_panel_checkbox(
         mud->panel_control_options,
+        "@whi@Tab keys (F2-F7): ", mud->options->keyboard_shortcuts, x, y);
+
+    mud->control_options[control] = &mud->options->keyboard_shortcuts;
+    mud->control_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+
+    y += OPTION_HORIZ_GAP;
+
+    control = mudclient_add_option_panel_checkbox(
+        mud->panel_control_options,
         "@whi@Compass menu: ", mud->options->compass_menu, x, y);
 
     mud->control_options[control] = &mud->options->compass_menu;
@@ -275,6 +410,17 @@ void mudclient_create_options_panel(mudclient *mud) {
         "@whi@Transaction menus: ", mud->options->transaction_menus, x, y);
 
     mud->control_options[control] = &mud->options->transaction_menus;
+    mud->control_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+
+    // Offer-X rows live in the right column
+    x += (ADDITIONAL_OPTIONS_WIDTH - 4) / 2;
+    y = ui_y + OPTION_HORIZ_GAP + ADDITIONAL_OPTIONS_TAB_HEIGHT + 4;
+
+    control = mudclient_add_option_panel_checkbox(
+        mud->panel_control_options,
+        "@whi@Hold to buy/sell in shop: ", mud->options->hold_to_buy, x, y);
+
+    mud->control_options[control] = &mud->options->hold_to_buy;
     mud->control_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
 
     y += OPTION_HORIZ_GAP;
@@ -295,16 +441,6 @@ void mudclient_create_options_panel(mudclient *mud) {
     mud->control_options[control] = &mud->options->last_offer_x;
     mud->control_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
 
-    x += (ADDITIONAL_OPTIONS_WIDTH - 4) / 2;
-    y = ui_y + OPTION_HORIZ_GAP + ADDITIONAL_OPTIONS_TAB_HEIGHT + 4;
-
-    control = mudclient_add_option_panel_checkbox(
-        mud->panel_control_options,
-        "@whi@Hold to buy/sell in shop: ", mud->options->hold_to_buy, x, y);
-
-    mud->control_options[control] = &mud->options->hold_to_buy;
-    mud->control_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
-
     y += OPTION_HORIZ_GAP;
 
     snprintf(formatted_digits, sizeof(formatted_digits), "%d",
@@ -320,11 +456,24 @@ void mudclient_create_options_panel(mudclient *mud) {
     y += OPTION_HORIZ_GAP;
 
     snprintf(formatted_digits, sizeof(formatted_digits), "%d",
-             mud->options->touch_pinch);
+             mud->options->touch_horizontal_drag);
 
     control = mudclient_add_option_panel_string(
         mud->panel_control_options,
-        "@whi@Horizontal pinch (touch): ", formatted_digits, 4, x, y);
+        "@whi@Horizontal drag (touch): ", formatted_digits, 4, x, y);
+
+    mud->control_options[control] = &mud->options->touch_horizontal_drag;
+    mud->control_option_types[control] = ADDITIONAL_OPTIONS_INT;
+
+    y += OPTION_HORIZ_GAP;
+
+    snprintf(formatted_digits, sizeof(formatted_digits), "%d",
+             mud->options->touch_pinch);
+
+    // pinch works at any angle
+    control = mudclient_add_option_panel_string(
+        mud->panel_control_options,
+        "@whi@Pinch zoom (touch): ", formatted_digits, 4, x, y);
 
     mud->control_options[control] = &mud->options->touch_pinch;
     mud->control_option_types[control] = ADDITIONAL_OPTIONS_INT;
@@ -340,6 +489,19 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     mud->control_options[control] = &mud->options->touch_menu_delay;
     mud->control_option_types[control] = ADDITIONAL_OPTIONS_INT;
+
+#if defined(__vita__)
+    // joystick: left-stick cursor speed + analog dead-zone, < > arrows
+    y += OPTION_HORIZ_GAP;
+    vita_add_adjuster(mud->panel_control_options, "@whi@Cursor speed: ",
+                      &mud->options->vita_cursor_sensitivity, 4, 40, 2,
+                      VITA_ADJ_INT, 26, x, y);
+
+    y += OPTION_HORIZ_GAP;
+    vita_add_adjuster(mud->panel_control_options, "@whi@Stick dead-zone: ",
+                      &mud->options->vita_stick_deadzone, 5, 60, 5, VITA_ADJ_INT,
+                      26, x, y);
+#endif
 
     /* ui */
     x = ui_x + 4;
@@ -357,6 +519,8 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     y += OPTION_HORIZ_GAP;
 
+    // UI Scale and Anti-alias are hidden on the Vita build
+#if !(defined(__vita__) && defined(RENDER_GL))
     control = mudclient_add_option_panel_checkbox(
         mud->panel_ui_options, "@whi@UI Scale: ", mud->options->ui_scale, x, y);
 
@@ -373,6 +537,7 @@ void mudclient_create_options_panel(mudclient *mud) {
     mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
 
     y += OPTION_HORIZ_GAP;
+#endif
 
     control = mudclient_add_option_panel_checkbox(
         mud->panel_ui_options,
@@ -406,6 +571,24 @@ void mudclient_create_options_panel(mudclient *mud) {
         "@whi@XP drops: ", mud->options->experience_drops, x, y);
 
     mud->ui_options[control] = &mud->options->experience_drops;
+    mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+
+    y += OPTION_HORIZ_GAP;
+
+    control = mudclient_add_option_panel_checkbox(
+        mud->panel_ui_options,
+        "@whi@XP counter: ", mud->options->xp_counter, x, y);
+
+    mud->ui_options[control] = &mud->options->xp_counter;
+    mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+
+    y += OPTION_HORIZ_GAP;
+
+    control = mudclient_add_option_panel_checkbox(
+        mud->panel_ui_options,
+        "@whi@XP counter details: ", mud->options->xp_counter_details, x, y);
+
+    mud->ui_options[control] = &mud->options->xp_counter_details;
     mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
 
     y += OPTION_HORIZ_GAP;
@@ -451,12 +634,22 @@ void mudclient_create_options_panel(mudclient *mud) {
         y += OPTION_HORIZ_GAP;
     }
 
+#if defined(__vita__)
+    // on the touch layout this row hosts the bottom-bar layout toggle
+    control = mudclient_add_option_panel_checkbox(
+        mud->panel_ui_options,
+        "@whi@Bottom chat bar: ", mud->options->touch_bottom_ui, x, y);
+
+    mud->ui_options[control] = &mud->options->touch_bottom_ui;
+    mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+#else
     control = mudclient_add_option_panel_checkbox(
         mud->panel_ui_options, "@whi@Status bars: ", mud->options->status_bars,
         x, y);
 
     mud->ui_options[control] = &mud->options->status_bars;
     mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+#endif
 
     y += OPTION_HORIZ_GAP;
 
@@ -478,6 +671,8 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     y += OPTION_HORIZ_GAP;
 
+    // the Vita has no wiki tab
+#if !defined(__vita__)
     if (mud->options->version_media > 42) {
         control = mudclient_add_option_panel_checkbox(
             mud->panel_ui_options, "@whi@Wiki lookup: ",
@@ -488,6 +683,7 @@ void mudclient_create_options_panel(mudclient *mud) {
 
         y += OPTION_HORIZ_GAP;
     }
+#endif
 
     control = mudclient_add_option_panel_checkbox(
         mud->panel_ui_options,
@@ -510,12 +706,19 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     y += OPTION_HORIZ_GAP;
 
+#if defined(__vita__)
+    // cursor picker: "Cursor: < Name >"
+    vita_add_adjuster(mud->panel_ui_options, "@whi@Cursor: ",
+                      &mud->options->vita_cursor_style, 0, 0, 1, VITA_ADJ_CURSOR,
+                      78, x, y);
+#else
     control = mudclient_add_option_panel_checkbox(
         mud->panel_ui_options,
         "@whi@Keyboard on right: ", mud->options->touch_keyboard_right, x, y);
 
     mud->ui_options[control] = &mud->options->touch_keyboard_right;
     mud->ui_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
+#endif
 
     /* bank */
     x = ui_x + 4;
@@ -772,6 +975,13 @@ void mudclient_handle_additional_options_input(mudclient *mud) {
                            mud->last_mouse_button_down, mud->mouse_button_down,
                            mud->mouse_scroll_delta);
     }
+
+#if defined(__vita__)
+    // cursor picker + joystick sliders: process their < / > arrow clicks
+    if (panel != NULL) {
+        vita_handle_adjusters(panel);
+    }
+#endif
 
     if (mud->last_mouse_button_down == 1) {
         /* close window */

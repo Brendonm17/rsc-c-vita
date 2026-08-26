@@ -6,13 +6,15 @@
 #include <stdlib.h>
 
 #ifdef RENDER_GL
-#ifdef GLAD
+#if defined(__vita__)
+#include <vitaGL.h>
+#elif defined(GLAD)
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
 #include <GL/glu.h>
 #endif
-#if !defined(SDL12) && !defined(__SWITCH__)
+#if !defined(SDL12) && !defined(__SWITCH__) && !defined(__vita__)
 #include <SDL_opengl.h>
 #endif
 
@@ -119,21 +121,45 @@ struct World {
 #endif
 
     int8_t thick_walls;
+
+    // whether to overlay the injected OpenRSC custom landscape (rune island + custom map edits) on sector loads
+    int8_t apply_custom_landscape;
+
+    // while set, world_load_section skips every live-side effect (scene adds, screen clear, minimap texture upload);
+    // world_load_section_commit replays them
+    int8_t defer_scene_adds;
+
+    // a detached world built by the prefetch worker: its models are in no scene; world_reset must not touch
+    // world->scene
+    int8_t detached;
+
+    // when non-NULL the minimap pixel writes go here (private worker scratch) instead of the shared surface texture
+    // buffer
+    uint8_t *minimap_buffer;
 };
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
 void world_gl_create_world_models_buffer(World *world, int max_models);
 void world_gl_buffer_world_models(World *world);
+void world_gl_buffer_world_models_to(World *world,
+                                     gl_vertex_buffer ***buffers,
+                                     int *buffers_length, int deferred);
 void world_gl_update_terrain_buffers(World *world);
+void world_gl_update_terrain_patch(World *world);
+void world_gl_update_terrain_flush(World *world);
 #endif
 
 void world_new(World *world, Scene *scene, Surface *surface, int version);
 void world_load_section(World *world, int x, int y, int plane);
+void world_load_section_commit(World *world);
+int world_free_models_step(World *world, int start_index, int max_slots);
+void world_free_models(World *world);
 int world_route(World *world, int start_x, int start_y, int end_x1, int end_y1,
                 int end_x2, int end_y2, int *route_x, int *route_y,
                 int objects);
 int world_is_under_roof(World *world, int x, int y);
 int world_get_tile_direction(World *world, int x, int y);
+void world_set_tile_direction(World *world, int x, int y, int direction);
 int world_get_elevation(World *world, int x, int y);
 int world_get_wall_roof(World *world, int x, int y);
 void world_register_wall_object(World *world, int x, int y, int dir, int id);

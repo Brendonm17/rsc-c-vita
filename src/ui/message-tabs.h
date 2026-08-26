@@ -35,6 +35,10 @@ void mudclient_draw_chat_message_tabs_panel(mudclient *mud);
 void mudclient_send_command_string(mudclient *mud, char *command);
 void mudclient_send_chat_message(mudclient *mud, int8_t *encoded,
                                  int encoded_length);
+#ifndef REVISION_177
+// custom: smart character count + rs2-huffman, not rsc compression
+void mudclient_send_chat_message_custom(mudclient *mud, const char *message);
+#endif
 void mudclient_handle_message_tabs_input(mudclient *mud);
 void mudclient_decrement_message_flash(mudclient *mud);
 void mudclient_show_message(mudclient *mud, char *message, MessageType type);

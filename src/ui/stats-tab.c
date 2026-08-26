@@ -1,21 +1,25 @@
 #include "stats-tab.h"
 
+// runecraft and harvesting exist only on custom servers
 const char *short_skill_names[] = {
     "Attack",   "Defense",  "Strength", "Hits",      "Ranged",  "Prayer",
     "Magic",    "Cooking",  "Woodcut",  "Fletching", "Fishing", "Firemaking",
-    "Crafting", "Smithing", "Mining",   "Herblaw",   "Agility", "Thieving"};
+    "Crafting", "Smithing", "Mining",   "Herblaw",   "Agility", "Thieving",
+    "Runecraft", "Harvest"};
 
 const char *skill_names[] = {
     "Attack",   "Defense",  "Strength",    "Hits",      "Ranged",  "Prayer",
     "Magic",    "Cooking",  "Woodcutting", "Fletching", "Fishing", "Firemaking",
-    "Crafting", "Smithing", "Mining",      "Herblaw",   "Agility", "Thieving"};
+    "Crafting", "Smithing", "Mining",      "Herblaw",   "Agility", "Thieving",
+    "Runecraft", "Harvesting"};
 
 int skills_length;
 
 static const char *equipment_stat_names[] = {"Armour", "WeaponAim",
                                              "WeaponPower", "Magic", "Prayer"};
 
-static int experience_array[100];
+// xp needed for each level; the xp counter reads it too
+int experience_array[100];
 
 static const char *free_quests[] = {
     "Black knight's fortress", "Cook's assistant",   "Demon slayer",
@@ -25,6 +29,7 @@ static const char *free_quests[] = {
     "Shield of Arrav",         "The knight's sword", "Vampire slayer",
     "Witch's potion",          "Dragon slayer"};
 
+// two custom quests appended at the end, index-aligned with the server
 static const char *members_quests[] = {
     "Witch's house",    "Lost city",         "Hero's quest",
     "Druidic ritual",   "Merlin's crystal",  "Scorpion catcher",
@@ -36,7 +41,8 @@ static const char *members_quests[] = {
     "Jungle potion",    "Grand tree",        "Shilo village",
     "Underground pass", "Observatory quest", "Tourist trap",
     "Watchtower",       "Dwarf Cannon",      "Murder Mystery",
-    "Digsite",          "Gertrude's Cat",    "Legend's Quest"};
+    "Digsite",          "Gertrude's Cat",    "Legend's Quest",
+    "Rune Mysteries",   "Peeling the Onion"};
 
 char **quest_names;
 int quests_length = 0;
@@ -150,6 +156,16 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
 
     int line_break = (is_compact && !is_touch ? 11 : 12);
 
+    // the "Total xp" line follows config 35 online (never on authentic worlds); SP keeps the local option.
+    // shared by height/wiki accounting and the draw so layout always agrees
+#ifdef WITH_SINGLEPLAYER
+    int show_total_xp = MUD_SP_WIRE(mud)
+                            ? mud->options->total_experience
+                            : (mud->protocol_custom && mud->orsc.want_exp_info);
+#else
+    int show_total_xp = mud->protocol_custom && mud->orsc.want_exp_info;
+#endif
+
     if (!is_compact && !mud->options->fatigue) {
         height -= line_break;
     }
@@ -158,7 +174,15 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
         height -= line_break;
     }
 
-    if (mud->options->total_experience || mud->options->remaining_experience) {
+    // grows the panel by one row per extra skill beyond 18
+    if (mud->player_skill_count > PLAYER_SKILL_COUNT &&
+        mud->options->max_skills >= 18) {
+        int extra_rows = ((mud->player_skill_count + 1) / 2) -
+                         ((PLAYER_SKILL_COUNT + 1) / 2);
+        height += extra_rows * line_break;
+    }
+
+    if (show_total_xp || mud->options->remaining_experience) {
         height += line_break;
     }
 
@@ -168,7 +192,26 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
     }
 
     if (is_touch) {
+        // 198 fit the 18-skill grid; grow for the extra custom-skill row and
+        // the total-xp line or the combat level and hover footer spill out.
+        // bottom-anchored, so extra height extends upward into free space
         height = 198;
+
+        // SKILLS sub-tab only; the quest list control was laid out against
+        // the fixed 198 box, growing it pushes the list out the bottom
+        if (mud->ui_tab_stats_sub_tab == 0) {
+            if (mud->player_skill_count > PLAYER_SKILL_COUNT &&
+                mud->options->max_skills >= 18) {
+                height += (((mud->player_skill_count + 1) / 2) -
+                           ((PLAYER_SKILL_COUNT + 1) / 2)) *
+                          line_break;
+            }
+
+            if (show_total_xp || mud->options->remaining_experience) {
+                height += line_break;
+            }
+        }
+
         ui_x = UI_TABS_TOUCH_X - STATS_WIDTH - 1;
         ui_y = (UI_TABS_TOUCH_Y + UI_TABS_TOUCH_HEIGHT) - height - 2;
     }
@@ -231,20 +274,37 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
         int second_column_indent;
         const char **display_skills;
 
+        // number of skills to display, clamped to the name arrays' length
+        int skill_name_capacity =
+            (int)(sizeof(short_skill_names) / sizeof(short_skill_names[0]));
+        int display_skill_count = mud->player_skill_count;
+
+        if (display_skill_count > skill_name_capacity) {
+            display_skill_count = skill_name_capacity;
+        }
+
         if (mud->options->max_skills < 18) {
             skills_per_column = 8;
             display_skills = skill_names;
             second_column_indent = ui_x + (STATS_WIDTH / 2) - 7;
+            display_skill_count = 16;
         } else {
-            skills_per_column = 9;
+            // left column gets the ceiling for odd skill counts
+            skills_per_column = (display_skill_count + 1) / 2;
             display_skills = short_skill_names;
             second_column_indent = ui_x + (STATS_WIDTH / 2) - 5;
         }
 
         /* draw two columns with each skill name and current/base levels */
         for (int i = 0; i < skills_per_column; i++) {
+            int right_index = i + skills_per_column;
+            int has_right = right_index < display_skill_count;
+
             total_experience += mud->player_experience[i];
-            total_experience += mud->player_experience[i + skills_per_column];
+
+            if (has_right) {
+                total_experience += mud->player_experience[right_index];
+            }
 
             /* left column */
             int text_colour = WHITE;
@@ -254,6 +314,20 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
                 mud->mouse_x < ui_x + (STATS_WIDTH / 2) - 8) {
                 text_colour = RED;
                 selected_skill = i;
+
+#ifndef REVISION_177
+                // clicking a skill opens its guide (config 25)
+                if (mud->mouse_button_click == 1 && !mud->selected_wiki &&
+                    i < SKILL_NAMES_COUNT &&
+                    ((mud->protocol_custom && mud->orsc.want_skill_menus)
+#ifdef WITH_SINGLEPLAYER
+                     || MUD_SP_WIRE(mud)
+#endif
+                     )) {
+                    mudclient_skill_guide_open(mud, skill_names[i]);
+                    mud->mouse_button_click = 0;
+                }
+#endif
             }
 
             /* longest skill name (10), @yel@ (4), two skills 3 each (6), colon
@@ -266,26 +340,42 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
             surface_draw_string(mud->surface, formatted_skill, ui_x + 5, y,
                                 FONT_BOLD_12, text_colour);
 
-            /* right column */
-            text_colour = WHITE;
+            // right column, skipped when the row has no second skill
+            if (has_right) {
+                text_colour = WHITE;
 
-            if (no_menus && mud->mouse_x >= ui_x + 90 &&
-                mud->mouse_y >= y - (line_break * (is_compact ? 1 : 2)) &&
-                mud->mouse_y < y - (is_compact ? 0 : (line_break - 1)) &&
-                mud->mouse_x < ui_x + STATS_WIDTH) {
-                text_colour = RED;
-                selected_skill = i + skills_per_column;
+                if (no_menus && mud->mouse_x >= ui_x + 90 &&
+                    mud->mouse_y >= y - (line_break * (is_compact ? 1 : 2)) &&
+                    mud->mouse_y < y - (is_compact ? 0 : (line_break - 1)) &&
+                    mud->mouse_x < ui_x + STATS_WIDTH) {
+                    text_colour = RED;
+                    selected_skill = right_index;
+
+#ifndef REVISION_177
+                    if (mud->mouse_button_click == 1 && !mud->selected_wiki &&
+                        right_index < SKILL_NAMES_COUNT &&
+                        ((mud->protocol_custom && mud->orsc.want_skill_menus)
+#ifdef WITH_SINGLEPLAYER
+                         || MUD_SP_WIRE(mud)
+#endif
+                         )) {
+                        mudclient_skill_guide_open(mud,
+                                                   skill_names[right_index]);
+                        mud->mouse_button_click = 0;
+                    }
+#endif
+                }
+
+                sprintf(formatted_skill, "%s:@yel@%d/%d",
+                        display_skills[right_index],
+                        mud->player_skill_current[right_index],
+                        mud->player_skill_base[right_index]);
+
+                surface_draw_string(mud->surface, formatted_skill,
+                                    second_column_indent,
+                                    y - (is_compact ? 0 : line_break + 1),
+                                    FONT_BOLD_12, text_colour);
             }
-
-            sprintf(formatted_skill, "%s:@yel@%d/%d",
-                    display_skills[i + skills_per_column],
-                    mud->player_skill_current[i + skills_per_column],
-                    mud->player_skill_base[i + skills_per_column]);
-
-            surface_draw_string(mud->surface, formatted_skill,
-                                second_column_indent,
-                                y - (is_compact ? 0 : line_break + 1),
-                                FONT_BOLD_12, text_colour);
 
             y += line_break + 1;
         }
@@ -333,6 +423,24 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
             y += is_compact ? 2 : 8;
         }
 
+#ifndef REVISION_177
+        // custom stat overlays: kill counter and elixir countdown
+        // exp-freeze indicator, shown only on sleep-without-fatigue worlds
+        if (!is_compact && mud->protocol_custom && mud->orsc.features_sleep &&
+            !mud->orsc.want_fatigue) {
+            y += line_break;
+
+            surface_draw_string(mud->surface,
+                                mud->orsc_experience_frozen ? "Exp gain off"
+                                                            : "Exp gain on",
+                                ui_x + 5, y - 13, FONT_BOLD_12,
+                                mud->orsc_experience_frozen ? RED : GREEN);
+
+            y += 8;
+        }
+
+#endif
+
         if (!is_compact) {
             mudclient_draw_equipment_status(mud, ui_x, y, line_break, no_menus);
 
@@ -351,7 +459,7 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
 
         int wiki_height = line_break * 2;
 
-        if (mud->options->total_experience) {
+        if (show_total_xp) {
             wiki_height += line_break;
         }
 
@@ -436,7 +544,14 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
 
             int total_level = 0;
 
-            for (int i = 0; i < skills_length; i++) {
+            // sums every skill the server sent, including custom ones
+            int total_skills = mud->player_skill_count;
+
+            if (total_skills > PLAYER_SKILL_MAX) {
+                total_skills = PLAYER_SKILL_MAX;
+            }
+
+            for (int i = 0; i < total_skills; i++) {
                 total_level += mud->player_skill_base[i];
             }
 
@@ -450,7 +565,7 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
 
             y += line_break;
 
-            if (mud->options->total_experience) {
+            if (show_total_xp) {
                 mudclient_format_number_commas(mud, total_experience / 4,
                                                formatted_number);
 
@@ -480,6 +595,29 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
     } else if ((!is_compact && mud->ui_tab_stats_sub_tab == 1) ||
                (is_compact && mud->ui_tab_stats_sub_tab == 2)) {
         int stats_height = 36 + STATS_HEIGHT + 5;
+
+#ifndef REVISION_177
+        // clicking a quest opens its guide (config 26); the guide tables are indexed by the OpenRSC quest id
+        if (no_menus && !mud->selected_wiki && mud->protocol_custom &&
+            mud->orsc.want_quest_menus && mud->mouse_button_click == 1 &&
+            mud->mouse_x > ui_x + 5 && mud->mouse_y > ui_y + 24 + line_break &&
+            mud->mouse_y < ui_y + stats_height) {
+            int quest_row =
+                mud->panel_quests
+                    ->control_list_entry_mouse_over[mud->control_list_quest];
+
+            // row 0 is the list header
+            if (quest_row > 0 && quest_row - 1 < mud->orsc_quest_count) {
+                int quest_index = quest_row - 1;
+
+                mudclient_quest_guide_open(
+                    mud, mud->orsc_quest_id[quest_index],
+                    mud->orsc_quest_name[quest_index],
+                    mud->orsc_quest_stage[quest_index]);
+                mud->mouse_button_click = 0;
+            }
+        }
+#endif
 
         if (no_menus && mud->selected_wiki && mud->mouse_x > ui_x + 5 &&
             mud->mouse_y > ui_y + 24 + line_break &&
@@ -515,6 +653,29 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
         panel_add_list_entry(mud->panel_quests, mud->control_list_quest, 0,
                              "@whi@Quest-list (green=completed)");
 
+#ifndef REVISION_177
+        if (mud->protocol_custom) {
+            // custom quests use their own numbering and colour rules
+            for (int i = 0; i < mud->orsc_quest_count; i++) {
+                int stage = mud->orsc_quest_stage[i];
+                char *quest_name = mud->orsc_quest_name[i];
+                char coloured_quest[ORSC_QUEST_NAME_MAX + 6];
+
+                const char *colour = "@red@";
+
+                if (stage < 0) {
+                    colour = "@gre@";
+                } else if (stage > 0 && mud->orsc.want_quest_started_indicator) {
+                    colour = "@yel@";
+                }
+
+                sprintf(coloured_quest, "%s%s", colour, quest_name);
+
+                panel_add_list_entry(mud->panel_quests, mud->control_list_quest,
+                                     i + 1, coloured_quest);
+            }
+        } else
+#endif
         for (int i = 0; i < mud->options->max_quests; i++) {
             char *quest_name = quest_names[i];
             char coloured_quest[strlen(quest_name) + 6];

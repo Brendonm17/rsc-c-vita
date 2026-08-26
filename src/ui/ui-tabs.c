@@ -51,9 +51,22 @@ void mudclient_draw_inventory_icon(mudclient *mud, int x, int y,
         surface_draw_box_alpha(mud->surface, x, y, 32, 32, GREY_B5, 128);
     }
 
-    mudclient_draw_item(
-        mud, x, y + 5, 32, 22,
-        mud->inventory_item_id[mud->selected_item_inventory_index]);
+    int selected_item_id;
+
+#ifndef REVISION_177
+    if (mud->selected_item_inventory_index >= INVENTORY_ITEMS_MAX) {
+        // an equipped item selected on the equipment tab (virtual index slot + 30)
+        selected_item_id =
+            mud->equipped_item_id[mud->selected_item_inventory_index -
+                                  INVENTORY_ITEMS_MAX];
+    } else
+#endif
+    {
+        selected_item_id =
+            mud->inventory_item_id[mud->selected_item_inventory_index];
+    }
+
+    mudclient_draw_item(mud, x, y + 5, 32, 22, selected_item_id);
 }
 
 void mudclient_draw_magic_icon(mudclient *mud, int x, int y, int is_selected) {

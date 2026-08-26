@@ -1,5 +1,15 @@
 #include "login.h"
 
+#ifdef WITH_SINGLEPLAYER
+// SP host and worldlist functions forward-declared
+void singleplayer_host_set_enabled(int on, const char *display_name);
+int singleplayer_host_guest_count(void);
+void worldlist_join_ensure_ready(void);
+void worldlist_join_activate(void);
+const char *worldlist_selected_sp_display_name(void);
+void worldlist_boot_host_for_selected_world(void);
+#endif
+
 void mudclient_create_login_panels(mudclient *mud) {
     int is_compact = mud->surface->width < MUD_VANILLA_WIDTH ||
                      mud->surface->height < MUD_VANILLA_HEIGHT;
@@ -478,6 +488,9 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
 
     int login_background_height = is_compact ? 125 : 200;
 
+    // login backdrop banner width: authored art width, not surface width
+    int login_background_width = is_compact ? MUD_MIN_WIDTH : MUD_VANILLA_WIDTH;
+
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
     int old_fov = mud->options->field_of_view;
     mud->options->field_of_view = 360;
@@ -520,7 +533,7 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
 
     game_model_gl_buffer_models(&mud->scene->gl_game_model_buffers,
                                 &mud->scene->gl_game_model_buffer_length,
-                                world_models, model_index);
+                                world_models, model_index, 0, 0);
 #endif
 
     int x = 9728;
@@ -535,6 +548,11 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
     /* clear the previous buffer */
     surface_gl_reset_context(mud->surface);
+#endif
+
+#if defined(__vita__) && defined(RENDER_GL)
+    // render this login-background frame into the off-screen FBO
+    surface_gl_capture_begin(mud->surface);
 #endif
 
     surface_black_screen(mud->surface);
@@ -563,6 +581,11 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
     surface_draw(mud->surface);
 #endif
 
+#if defined(__vita__) && defined(RENDER_GL)
+    // end and flush the FBO scene before the glReadPixels below
+    surface_gl_capture_end(mud->surface);
+#endif
+
 #ifdef RENDER_3DS_GL
     C3D_FrameEnd(0);
 
@@ -572,7 +595,7 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
 #endif
 
     surface_screen_raster_to_sprite(mud->surface, mud->sprite_logo, 0, 0,
-                                    mud->surface->width,
+                                    login_background_width,
                                     login_background_height);
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
@@ -590,6 +613,10 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
     y = 9216;
     zoom = 1100;
     rotation = 888;
+
+#if defined(__vita__) && defined(RENDER_GL)
+    surface_gl_capture_begin(mud->surface);
+#endif
 
     surface_black_screen(mud->surface);
 
@@ -612,6 +639,10 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
     surface_draw(mud->surface);
 #endif
 
+#if defined(__vita__) && defined(RENDER_GL)
+    surface_gl_capture_end(mud->surface);
+#endif
+
 #ifdef RENDER_3DS_GL
     C3D_FrameEnd(0);
 
@@ -619,7 +650,7 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
 #endif
 
     surface_screen_raster_to_sprite(mud->surface, mud->sprite_logo + 1, 0, 0,
-                                    mud->surface->width,
+                                    login_background_width,
                                     login_background_height);
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
@@ -662,6 +693,10 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
     zoom = 500;
     rotation = 376;
 
+#if defined(__vita__) && defined(RENDER_GL)
+    surface_gl_capture_begin(mud->surface);
+#endif
+
     surface_black_screen(mud->surface);
 
     scene_set_camera(mud->scene, x, -world_get_elevation(mud->world, x, y), y,
@@ -683,6 +718,10 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
     surface_draw(mud->surface);
 #endif
 
+#if defined(__vita__) && defined(RENDER_GL)
+    surface_gl_capture_end(mud->surface);
+#endif
+
 #ifdef RENDER_3DS_GL
     C3D_FrameEnd(0);
 
@@ -692,11 +731,14 @@ void mudclient_render_login_scene_sprites(mudclient *mud) {
 #endif
 
     surface_screen_raster_to_sprite(mud->surface, mud->sprite_logo + 2, 0, 0,
-                                    mud->surface->width,
+                                    login_background_width,
                                     login_background_height);
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
     surface_gl_apply_login_filter(mud->surface, mud->sprite_logo + 2);
+#endif
+
+#if defined(__vita__) && defined(RENDER_GL)
 #endif
 
 #ifdef RENDER_SW
@@ -764,12 +806,30 @@ void mudclient_draw_login_screens(mudclient *mud) {
 
         cycle %= 1024;
 
-        if (scale_login) {
-            surface_draw_sprite_scale(
-                mud->surface, offset_x, offset_y + 10, login_background_width,
-                login_background_height, mud->sprite_logo + sprite_offset, 0);
+        // backdrop draw rect; default is the centred banner
+        int bg_draw_x = offset_x;
+        int bg_draw_y = offset_y + 10;
+        int bg_draw_width = login_background_width;
+        int bg_draw_height = login_background_height;
+        int bg_force_scale = scale_login;
+        int bg_fade_edges = 1;
+
+#if defined(__vita__) && defined(RENDER_GL)
+        // Vita: full-width banner across the top, no edge fade
+        bg_draw_x = 0;
+        bg_draw_y = 6;
+        bg_draw_width = mud->surface->width;
+        bg_draw_height = 300;
+        bg_force_scale = 1;
+        bg_fade_edges = 0;
+#endif
+
+        if (bg_force_scale) {
+            surface_draw_sprite_scale(mud->surface, bg_draw_x, bg_draw_y,
+                                      bg_draw_width, bg_draw_height,
+                                      mud->sprite_logo + sprite_offset, 0);
         } else {
-            surface_draw_sprite(mud->surface, offset_x, offset_y + 10,
+            surface_draw_sprite(mud->surface, bg_draw_x, bg_draw_y,
                                 mud->sprite_logo + sprite_offset);
         }
 
@@ -779,19 +839,18 @@ void mudclient_draw_login_screens(mudclient *mud) {
 
             int alpha = cycle - 768;
 
-            if (scale_login) {
+            if (bg_force_scale) {
                 surface_draw_sprite_scale_alpha(
-                    mud->surface, offset_x, offset_y + 10,
-                    login_background_width, login_background_height,
-                    next_sprite, alpha);
+                    mud->surface, bg_draw_x, bg_draw_y, bg_draw_width,
+                    bg_draw_height, next_sprite, alpha);
             } else {
-                surface_draw_sprite_alpha(mud->surface, offset_x, offset_y + 10,
+                surface_draw_sprite_alpha(mud->surface, bg_draw_x, bg_draw_y,
                                           next_sprite, alpha);
             }
         }
 
         /* fade the left/right of the login scene if the width exceeds 512 */
-        if (offset_x > 0) {
+        if (bg_fade_edges && offset_x > 0) {
             for (int i = 0; i < 3; i++) {
                 int alpha = 192 - (i * 64);
 
@@ -816,6 +875,27 @@ void mudclient_draw_login_screens(mudclient *mud) {
         panel_draw_panel(mud->panel_login_new_user);
         break;
     case LOGIN_STAGE_EXISTING: {
+#ifdef WITH_SINGLEPLAYER
+        // SP wire is username-only; hide the password field's three controls
+        int show_pw = !MUD_SP_WIRE(mud);
+        mud->panel_login_existing_user
+            ->control_shown[mud->control_login_password] = show_pw;
+        mud->panel_login_existing_user
+            ->control_shown[mud->control_login_password - 1] = show_pw;
+        mud->panel_login_existing_user
+            ->control_shown[mud->control_login_password - 2] = show_pw;
+
+        // SP: rewrite only the default login prompt
+        if (MUD_SP_WIRE(mud) &&
+            strcmp(panel_get_text(mud->panel_login_existing_user,
+                                  mud->control_login_status),
+                   "Please enter your username and password") == 0) {
+            panel_update_text(mud->panel_login_existing_user,
+                              mud->control_login_status,
+                              "Please enter your username");
+        }
+#endif
+
         if (is_compact) {
             int box_height = 12;
 
@@ -839,6 +919,9 @@ void mudclient_draw_login_screens(mudclient *mud) {
         break;
     case LOGIN_STAGE_WORLD:
         panel_draw_panel(mud->panel_login_worldlist);
+#ifdef WITH_SINGLEPLAYER
+        worldlist_draw_editor(mud);
+#endif
         break;
     }
 
@@ -857,7 +940,10 @@ void mudclient_draw_login_screens(mudclient *mud) {
     surface_draw(mud->surface);
 
 #ifdef RENDER_GL
-#ifdef SDL12
+#if defined(__vita__)
+    // Vita: present the login screen with vglSwapBuffers
+    vglSwapBuffers(GL_TRUE);
+#elif defined(SDL12)
     SDL_GL_SwapBuffers();
 #else
     SDL_GL_SwapWindow(mud->gl_window);
@@ -1110,6 +1196,13 @@ void mudclient_handle_login_screen_input(mudclient *mud) {
             strcpy(mud->login_pass,
                    panel_get_text(mud->panel_login_existing_user,
                                   mud->control_login_password));
+
+#ifdef WITH_SINGLEPLAYER
+            if (mud->singleplayer) {
+                // boot SP world; hosts co-op only if it opted into LAN/Ad-hoc
+                worldlist_boot_host_for_selected_world();
+            }
+#endif
 
             mudclient_login(mud, mud->login_username, mud->login_pass, 0);
         } /*else if (panel_is_clicked(mud->panel_login_existing_user,

@@ -78,13 +78,15 @@
 #endif
 
 #ifdef RENDER_GL
-#ifdef GLAD
+#if defined(__vita__)
+#include <vitaGL.h>
+#elif defined(GLAD)
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
 #include <GL/glu.h>
 #endif
-#if !defined(SDL12) && !defined(__SWITCH__)
+#if !defined(SDL12) && !defined(__SWITCH__) && !defined(__vita__)
 #include <SDL_opengl.h>
 #endif
 
@@ -105,6 +107,12 @@
 #define K_PAGE_DOWN 34
 #define K_HOME 36
 #define K_F1 112
+#define K_F2 113
+#define K_F3 114
+#define K_F4 115
+#define K_F5 116
+#define K_F6 117
+#define K_F7 118
 #define K_ENTER 13
 
 #define K_BACKSPACE 8
@@ -140,6 +148,16 @@
 #define VERSION 204
 #endif
 
+// embedded 2003scape server expects protocol "204"; the OpenRSC build sends VERSION (203)
+// true when the client speaks the single-player wire shape: plaintext-204, no ISAAC, username-only, auto-register
+#ifdef WITH_SINGLEPLAYER
+#define MUD_SP_WIRE(mud) ((mud)->singleplayer || (mud)->spnet_guest)
+#define LOGIN_VERSION(mud) (MUD_SP_WIRE(mud) ? 204 : VERSION)
+#else
+#define MUD_SP_WIRE(mud) (0)
+#define LOGIN_VERSION(mud) (VERSION)
+#endif
+
 #ifndef MUD_DATADIR
 #define MUD_DATADIR "/usr/local/share/rsc-c"
 #endif
@@ -158,6 +176,31 @@
 /* maximum amount of friends/ignores */
 #define SOCIAL_LIST_MAX 100
 
+// dialogue-option capacity; authentic caps menus at 5, custom sends up to 13; parse clamps
+#define OPTION_MENU_MAX 16
+
+// custom (10010) quest capacity; quests are a dynamic server-named list; parse clamps
+#define ORSC_QUEST_MAX 64
+#define ORSC_QUEST_NAME_MAX 48
+
+// longest item name + " Certificate" + NUL, with headroom
+#define ITEM_NAME_DISPLAY_MAX 96
+
+// note sprite 438, certificate sprite 180; both from the stock item cache
+#define ORSC_NOTE_SPRITE 438
+#define ORSC_CERTIFICATE_SPRITE 180
+
+// capped online-player store; the OpenRSC list is unbounded and scrolls
+#define ORSC_ONLINE_LIST_MAX 256
+#define ORSC_ONLINE_LOCATION_MAX 32
+// their update(): listEndPoint = startComponentIndex + 49
+#define ORSC_ONLINE_LIST_WINDOW 50
+
+// bank preset count; SEND_BANK_PRESET (150) is per-slot
+#define ORSC_PRESET_COUNT 2
+// preset packet collapses 14 equipment entries to 11: 5->0, 6->1, 7->2, >7 -= 3
+#define ORSC_PRESET_EQUIP_WIRE_COUNT 14
+
 #define INPUT_TEXT_LENGTH 20
 #define INPUT_PM_LENGTH 80
 #define INPUT_DIGITS_LENGTH 14 /* 2,147,483,647m */
@@ -171,7 +214,10 @@
 #define NPCS_MAX 500
 #define GROUND_ITEMS_MAX 5000
 #define PRAYER_COUNT 50
+// PLAYER_SKILL_COUNT = authentic 18-skill baseline; PLAYER_SKILL_MAX = array capacity for custom extra skills (e.g.
+// 19th Runecraft)
 #define PLAYER_SKILL_COUNT 18
+#define PLAYER_SKILL_MAX 24
 #define PLAYER_STAT_EQUIPMENT_COUNT 5
 #define PROJECTILE_RANGE_MAX 40
 
@@ -184,7 +230,8 @@
 
 #define INVENTORY_ITEMS_MAX 30
 #define PATH_STEPS_MAX 8000
-#define BANK_ITEMS_MAX 256
+// bank item capacity; custom member worlds hold up to ItemId.maxCustom (1592)
+#define BANK_ITEMS_MAX 1592
 #define SHOP_ITEMS_MAX 256 // TODO also just make this 40? (SHOP_GRID_MAX)
 #define TRADE_ITEMS_MAX 14
 #define DUEL_ITEMS_MAX 8
@@ -268,7 +315,8 @@
 #define SKILL_MAGIC 6
 
 /* sprite stuff */
-#define SPRITE_LIMIT 4000
+// sprite limit 5120: room for OpenRSC custom entity sprites (file_id 4032..5093, custom_entities.png atlas)
+#define SPRITE_LIMIT 5120
 
 /* jagex loading screen on startup */
 #define LOADING_WIDTH 277
@@ -286,6 +334,7 @@ typedef struct mudclient mudclient;
 #include "game-data.h"
 #include "game-model.h"
 #include "lib/bzip.h"
+#include "lib/orsc-huffman.h"
 #include "options.h"
 #include "packet-handler.h"
 #include "packet-stream.h"
@@ -299,11 +348,18 @@ typedef struct mudclient mudclient;
 
 #include "ui/additional-options.h"
 #include "ui/appearance.h"
+#include "ui/auction.h"
+#include "ui/bank-pin.h"
+#include "ui/bank-preset.h"
+#include "ui/online-list.h"
 #include "ui/bank.h"
 #include "ui/combat-style.h"
 #include "ui/confirm.h"
+#include "ui/crowns.h"
 #include "ui/duel.h"
 #include "ui/experience-drops.h"
+#include "ui/ironman.h"
+#include "ui/kill-feed.h"
 #include "ui/login.h"
 #include "ui/logout.h"
 #include "ui/lost-connection.h"
@@ -312,8 +368,10 @@ typedef struct mudclient mudclient;
 #include "ui/offer-x.h"
 #include "ui/option-menu.h"
 #include "ui/options-tab.h"
+#include "ui/progress-bar.h"
 #include "ui/server-message.h"
 #include "ui/shop.h"
+#include "ui/skill-guide.h"
 #include "ui/sleep.h"
 #include "ui/social-tab.h"
 #include "ui/stats-tab.h"
@@ -427,6 +485,8 @@ struct ItemSpawn {
     int16_t z;
     uint16_t id;
     uint8_t already_in_menu;
+    // per-item noted flag; custom (10010) with S_WANT_BANK_NOTES only, else 0
+    uint8_t noted;
 };
 
 struct Scenery {
@@ -477,6 +537,31 @@ struct MenuEntry {
     int32_t target_index;
 };
 
+#if defined(RENDER_GL) || defined(RENDER_3DS_GL)
+// one prebuilt region held ready for an instant crossing; ~7MB each, two slots (region just left + approached
+// neighbour)
+#define REGION_CACHE_SLOTS 2
+
+enum RegionCacheState {
+    REGION_SLOT_EMPTY = 0,
+    REGION_SLOT_BUILDING,
+    REGION_SLOT_READY
+};
+
+struct RegionCacheEntry {
+    int state; // enum RegionCacheState
+    int sx;
+    int sy;
+    int plane;
+    uint64_t last_touch;
+    struct World *world;
+    gl_vertex_buffer **buffers;
+    int buffer_length;
+    int realized; // 1 = GL objects fully uploaded and ready to swap in
+    int realize_index; // buffer currently being uploaded incrementally, or 0
+};
+#endif
+
 struct mudclient {
 #ifdef WII
     /* store two for double-buffering */
@@ -520,6 +605,12 @@ struct mudclient {
 
     SDL_Surface *screen;
     SDL_Surface *pixel_surface;
+
+#ifdef __vita__
+    // Vita presents the software surface through the gxm SDL_Renderer; it also composites the system IME
+    SDL_Renderer *vita_renderer;
+    SDL_Texture *vita_texture;
+#endif
 
 #if defined(RENDER_GL) && !defined(SDL12)
     SDL_Window *gl_window;
@@ -632,6 +723,33 @@ struct mudclient {
     int8_t settings_block_duel;
     int8_t settings_mouse_button_one;
     int8_t settings_sound_disabled;
+
+    // draw each player's name and clan tag above their head; custom-online, server-driven via SEND_GAME_SETTINGS,
+    // defaults on
+    int8_t orsc_name_clan_tag_overlay;
+
+    // per-player show flags for the side-menu HUD and kill feed, from the SEND_GAME_SETTINGS trailer (bytes 20/21);
+    // default 1 shows both
+    int8_t orsc_show_side_menu;
+    int8_t orsc_show_kill_feed;
+    // kill-counter lines in the side-menu HUD; per-account opt-in, default off; settings tail reads 28 and 34
+    int8_t orsc_show_npc_kc;
+    int8_t orsc_show_recent_npc_kc;
+
+    // last bank certificate-deposit mode sent to the server; packet 199 sub-op 0, on change only
+    int8_t orsc_bank_cert_mode;
+    // the deposit being initiated is an "Uncert+Deposit" row
+    int8_t bank_offer_uncert;
+
+    // synced xp-counter state (settings-tail read 23): 0 never, 1 recent, 2 always
+    int8_t orsc_xp_counter_synced;
+
+    // session xp tracking for the Gained / xp-per-hour lines; fed only by the incremental experience packet
+    int player_experience_gained[PLAYER_SKILL_MAX];
+    uint64_t xp_gain_start_ms[PLAYER_SKILL_MAX];
+    int64_t xp_gained_total;
+    uint64_t xp_gained_total_start_ms;
+    int xp_last_gain_skill;
 
     ChangePasswordStep show_change_password_step;
     char change_password_old[PASSWORD_LENGTH + 1];
@@ -872,6 +990,8 @@ struct mudclient {
     int inventory_item_id[INVENTORY_ITEMS_MAX];
     int inventory_item_stack_count[INVENTORY_ITEMS_MAX]; // TODO rename
     int inventory_equipped[INVENTORY_ITEMS_MAX];
+    // per-slot noted flag in custom inventory packets; 0 on authentic/SP; a noted item always carries an amount
+    int inventory_item_noted[INVENTORY_ITEMS_MAX];
     int selected_item_inventory_index;
     char *selected_item_name;
 
@@ -879,10 +999,50 @@ struct mudclient {
     Panel *panel_quests;
     int control_list_quest;
     int8_t *quest_complete;
+
+    // custom (10010) quest list: (id, stage, name) triples; stage < 0 complete, > 0 started, 0 not started; empty on
+    // authentic/SP
+    int orsc_quest_count;
+    int orsc_quest_id[ORSC_QUEST_MAX];
+    int orsc_quest_stage[ORSC_QUEST_MAX];
+    char orsc_quest_name[ORSC_QUEST_MAX][ORSC_QUEST_NAME_MAX];
+
+    // custom (10010) SEND_BANK_PRESET (150): stored loadout per preset slot; id -1 = empty slot
+    int8_t orsc_preset_known[ORSC_PRESET_COUNT];
+    int orsc_preset_inventory_id[ORSC_PRESET_COUNT][INVENTORY_ITEMS_MAX];
+    int orsc_preset_inventory_amount[ORSC_PRESET_COUNT][INVENTORY_ITEMS_MAX];
+    uint8_t orsc_preset_inventory_noted[ORSC_PRESET_COUNT][INVENTORY_ITEMS_MAX];
+    int orsc_preset_equipment_id[ORSC_PRESET_COUNT][11];
+    int orsc_preset_equipment_amount[ORSC_PRESET_COUNT][11];
+
+    // preset viewer ("Assign Presets") state
+    int8_t show_dialog_bank_preset;
+    int bank_preset_selected_slot;
+
+    // client-side note toggle; sets the noted byte on a custom BANK_WITHDRAW
+    int8_t bank_swap_note_mode;
+
+    // bank slot picked up for a reorder, or -1 (0 is a real slot)
+    int bank_organize_slot;
+    int8_t bank_organize_insert;
+
+    // custom (10010) SEND_ONLINE_LIST (136); filled by the ::online reply
+    int orsc_online_count;
+    char orsc_online_name[ORSC_ONLINE_LIST_MAX][MAX_USER_LENGTH + 1];
+    int orsc_online_crown[ORSC_ONLINE_LIST_MAX];
+    char orsc_online_location[ORSC_ONLINE_LIST_MAX][ORSC_ONLINE_LOCATION_MAX];
+    int8_t show_dialog_online_list;
+    int online_list_scroll;
+    // per-entry right-click menu: -1 = hidden, else the entry index
+    int online_list_menu_entry;
+    int online_list_menu_x;
+    int online_list_menu_y;
     int ui_tab_stats_sub_tab;
-    int player_skill_current[PLAYER_SKILL_COUNT];
-    int player_skill_base[PLAYER_SKILL_COUNT];
-    int player_experience[PLAYER_SKILL_COUNT];
+    int player_skill_current[PLAYER_SKILL_MAX];
+    int player_skill_base[PLAYER_SKILL_MAX];
+    int player_experience[PLAYER_SKILL_MAX];
+    // skills sent in the last stat-list packet: N = (len - 1) / 6; defaults to 18
+    int player_skill_count;
     int player_quest_points;
     int stat_fatigue;
     int player_stat_equipment[PLAYER_STAT_EQUIPMENT_COUNT];
@@ -907,7 +1067,52 @@ struct mudclient {
 
 #if defined(RENDER_GL) || defined(RENDER_3DS_GL)
     int gl_is_walking;
+
+    // set by the first packet tick of a rendered frame; later catch-up cycles skip the socket syscalls
+    int gl_net_io_this_frame;
+
+    // object set changed (SERVER_REGION_OBJECTS); scenery bake + terrain lighting refresh once in the next draw_game
+    int gl_region_bake_pending;
+    int gl_region_bake_last_ms;
+
+    // deferred, coalesced wall + ground-item GL rebuilds; done at most once per frame in draw_game
+    int gl_wall_update_pending;
+    int gl_ground_item_update_pending;
+
+    // async region loader: a worker builds a neighbouring region off-thread into an LRU cache; a crossing becomes a
+    // pointer swap + GL realize
+    struct World *region_next_world;
+    gl_vertex_buffer **region_next_buffers;
+    int region_next_buffer_length;
+    int region_load_state; // 0 idle, 1 a build is in flight
+    int region_load_lx;
+    int region_load_ly;
+    int region_load_plane;
+    volatile int region_load_done;
+    int region_load_force_sync;
+    int region_building_index; // cache slot the in-flight build targets, or -1
+    uint64_t region_touch_clock;
+
+    // previous world after a swap; its models free a slice per frame
+    struct World *region_old_world;
+    int region_old_free_index;
+
+    struct RegionCacheEntry region_cache[REGION_CACHE_SLOTS];
+
+    // off-thread scenery bake: worker bakes geometry into a private arena, the render thread realizes the buffers and
+    // re-points models; single-worker gate shared with region build
+    int region_bake_state; // 0 idle, 1 building
+    volatile int region_bake_done;
+    int16_t *bake_next_arena;
+    struct GameModel **bake_next_copies;
+    struct GameModel **bake_live_models;
+    int bake_next_count;
+    gl_vertex_buffer **bake_next_buffers;
+    int bake_next_buffer_length;
 #endif
+
+    // roof-visibility state last applied to the scene; 0 = unknown, forces a re-apply
+    int gl_roof_scene_state;
 
 #ifdef RENDER_GL
     int gl_mouse_x;
@@ -935,6 +1140,22 @@ struct mudclient {
     int control_appearance_bottom_right;
     int control_appearance_accept;
 
+    // OpenRSC per-character game-mode (Ironman), one-xp toggle, and class, chosen on the appearance screen; sent as
+    // extra bytes on CLIENT_APPEARANCE
+    int control_appearance_ironman_left;
+    int control_appearance_ironman_right;
+    int control_appearance_onexp_left;
+    int control_appearance_onexp_right;
+    int control_appearance_class_left;
+    int control_appearance_class_right;
+    // box centres, so the draw pass can render the current selection text
+    int appearance_ironman_box_x;
+    int appearance_ironman_box_y;
+    int appearance_onexp_box_x;
+    int appearance_onexp_box_y;
+    int appearance_class_box_x;
+    int appearance_class_box_y;
+
     int8_t show_appearance_change;
     int appearance_head_type;
     int appearance_head_gender;
@@ -944,10 +1165,17 @@ struct mudclient {
     int appearance_skin_colour;
     int appearance_bottom_colour;
 
+    // 0 Regular(None) 1 Ironman 2 Ultimate 3 Hardcore  (IronmanMode ids)
+    int appearance_ironman_mode;
+    // 0 = use world xp rate, 1 = original 1x xp (OpenRSC isOneXp byte)
+    int appearance_one_xp;
+    // 0 ADVENTURER 1 WARRIOR 2 WIZARD 3 NECROMANCER 4 RANGER 5 MINER
+    int appearance_class;
+
     /* ./ui/option-menu.c */
     int8_t show_option_menu;
     int option_menu_count;
-    char option_menu_entry[5][255];
+    char option_menu_entry[OPTION_MENU_MAX][255];
 
     /* ./ui/welcome.c */
     int8_t show_dialog_welcome;
@@ -1014,6 +1242,8 @@ struct mudclient {
     int transaction_tab; /* used for compact mode */
 
     int64_t transaction_recipient_confirm_name;
+    // custom (10010) confirm windows send the opponent name as a string, not a base37 hash; the raw string is kept
+    char transaction_recipient_confirm_name_str[USERNAME_LENGTH + 1];
     int transaction_confirm_item_count;
     int transaction_confirm_items[TRADE_ITEMS_MAX];
     int transaction_confirm_items_count[TRADE_ITEMS_MAX];
@@ -1021,6 +1251,12 @@ struct mudclient {
     int transaction_recipient_confirm_items[TRADE_ITEMS_MAX];
     int transaction_recipient_confirm_items_count[TRADE_ITEMS_MAX];
     int transaction_confirm_accepted;
+
+    // per-item noted flag in trade/duel item lists; custom (10010) with S_WANT_BANK_NOTES, else 0
+    uint8_t transaction_items_noted[TRADE_ITEMS_MAX];
+    uint8_t transaction_recipient_items_noted[TRADE_ITEMS_MAX];
+    uint8_t transaction_confirm_items_noted[TRADE_ITEMS_MAX];
+    uint8_t transaction_recipient_confirm_items_noted[TRADE_ITEMS_MAX];
 
     /* ./ui/trade.c */
     int8_t show_dialog_trade;
@@ -1039,6 +1275,9 @@ struct mudclient {
     int8_t show_dialog_offer_x;
     int offer_id;
     int offer_max;
+
+    // OpenRSC want_drop_x: inventory slot awaiting a drop-X amount, or -1
+    int drop_offer_index;
 
     /* ./ui/confirm.c */
     int8_t show_dialog_confirm;
@@ -1081,6 +1320,227 @@ struct mudclient {
 
     char rsa_exponent[512];
     char rsa_modulus[512];
+
+#ifdef WITH_SINGLEPLAYER
+    int singleplayer; // play against the embedded offline server (loopback)
+#endif
+
+    // selected online world speaks the revision-177 dialect (OpenRSC); 0 = canonical 204 protocol
+    int protocol177;
+
+    // selected online world is an OpenRSC custom world (client_version 10010): 2-byte plaintext framing, custom
+    // login, no ISAAC, native 204 opcodes
+    int protocol_custom;
+
+    // OpenRSC custom-world config flags from SEND_SERVER_CONFIGS (opcode 19); drive per-world sprites, landscape,
+    // extra skills, custom UI
+    struct {
+        int custom_sprites;
+        int custom_landscape;
+        int want_runecraft;
+        int want_harvesting;
+        int want_equipment_tab;
+        int want_clans;
+        int want_parties;
+        int want_bank_pins;
+        int spawn_auction_npcs; // 4  (also gates a banker's "Collect")
+        int floating_nametags; // 6
+        int want_kill_feed; // 8
+        int batch_progression; // 12
+        // 18. Gates their on-screen xp counter (and its settings row).
+        int experience_counter_toggle; // 18
+        // 25/26: gate the skill-guide and quest-guide windows
+        int want_skill_menus; // 25
+        int want_quest_menus; // 26
+        // 19: gates the xp-drops settings row
+        int experience_drops_toggle; // 19
+        // 28: dialogue-option hotkeys: 0 = off, 1 = number keys 1-5, 2 = keys + a "(N)" prefix
+        int want_keyboard_shortcuts; // 28
+        // 35. Adds the all-skills "Total xp" line to the stats tab.
+        int want_exp_info; // 35
+        // 32: certificate deposits; adds "Uncert+Deposit-X/All" rows to the bank deposit menu; wire is packet 199
+        // sub-op 0 + mode byte
+        int want_cert_deposit; // 32
+        // 41: colour-carry; re-apply the last @col@ code across a wrap in overhead chat
+        int want_fixed_overhead_chat; // 41
+        // 67: swaps the "web" wall-object commands to Slice/WalkTo (from WalkTo/Examine)
+        int want_leftclick_webs; // 67
+        // 1: world display name ("RSC Cabbage")
+        char server_name[32]; // 1 (string)
+        int side_menu; // 13 (their sideMenuToggle HUD)
+        int want_elixirs; // 27
+        int want_drop_x; // 34 (gates the Drop-X inventory menu)
+        int want_nature_rune_protection; // 90 (blocks alch on Nature-Rune)
+        // 31: when set, custom trade/duel/ground-item payloads carry a per-item noted byte
+        // 29: gates the custom bank interface (presets, equipment panel, drag-reorder, note toggles) and maxBankSize
+        // = ItemId.maxCustom
+        int want_custom_banks; // 29
+        int want_bank_notes; // 31
+        // 79: noted-form wording; set = "<item>", clear = "<item> Certificate"
+        int want_cert_as_notes; // 79
+        // 39: gates the staff colour prefix on a player's name
+        int want_custom_rank_display; // 39
+        int right_click_bank; // 40
+        int want_fatigue; // 51
+        int want_quest_started_indicator; // 57 (yellow "started" quest name)
+        int want_bank_presets; // 63
+        // 71: appearance panel type: 0 = authentic (no extra selectors), 1 = ironman list + 1X-xp question, 2 =
+        // classes + global PK; gates the Mode/Class/XP-rate rows
+        int character_creation_mode; // 71
+        // 72: world skilling xp multiplier (Cabbage 5, Coleslaw 2)
+        int skilling_exp_rate; // 72
+        int right_click_trade; // 76
+        int features_sleep; // 77
+        int want_openpk_points; // 80
+    } orsc;
+
+    // OpenRSC worn-equipment snapshot (SEND_EQUIPMENT 254 / _UPDATE 255): 11 display slots; 14 wield positions
+    // collapse 5->0, 6->1, 7->2, >7 -= 3
+    int equipped_item_id[11];
+    int equipped_item_amount[11];
+    int tab_equipment_index; // 0 = inventory grid, 1 = equipment paperdoll
+
+    // OpenRSC stat-overlay state from custom-only packets; *_seen flags double as display gates
+    int orsc_npc_kills_total; // SEND_NPC_KILLS 147: 3x i32
+    int orsc_npc_kills_recent_id;
+    int orsc_npc_kills_recent_count;
+    int orsc_npc_kills_seen;
+    // SEND_ELIXIR 54: raw wire units, decremented once per engine tick, displayed as (timer/50) -> M:SS
+    int orsc_elixir_timer;
+    int orsc_experience_frozen; // SEND_EXPERIENCE_TOGGLE 34: u8
+    int orsc_exp_shared; // SEND_EXPSHARED 98: u16 (party share)
+    int64_t orsc_openpk_points; // SEND_OPENPK_POINTS 148: i64 (OpenPK)
+
+    // OpenRSC custom bank PIN pad (SEND_BANK_PIN 135; see ui/bank-pin.c)
+    int show_dialog_bank_pin;
+    char bank_pin_input[5];
+    int bank_pin_length;
+
+    // OpenRSC custom batch progress bar (SEND_STATUS_PROGRESS_BAR 134)
+    int orsc_progress_visible;
+    int orsc_progress_total;
+    int orsc_progress_current;
+    int orsc_progress_delay; // ms per batch item (stored, not yet animated)
+
+    // OpenRSC custom clans (SEND_CLAN 112): actionId 0 = roster snapshot, 1 = left/cleared, 2 = invite popup, 3 =
+    // settings, 4 = clan list; ORSC_CLAN_MEMBERS_MAX caps the roster, overflow dropped
+#define ORSC_CLAN_MEMBERS_MAX 50
+    int orsc_clan_in;
+    char orsc_clan_name[33];
+    char orsc_clan_tag[9];
+    char orsc_clan_leader[33];
+    int orsc_clan_is_leader;
+    int orsc_clan_size;
+    char orsc_clan_member_names[ORSC_CLAN_MEMBERS_MAX][33];
+    int orsc_clan_member_ranks[ORSC_CLAN_MEMBERS_MAX];
+    int orsc_clan_member_online[ORSC_CLAN_MEMBERS_MAX];
+    char orsc_clan_create_name[33]; // step-1 stash of the create flow
+    char orsc_clan_pending_leader[33]; // leadership-transfer confirm target
+    int orsc_clan_settings[5]; // kick/invite/searchJoin/allow0/allow1
+
+    // clan browse results (SEND_CLAN actionId 4, requested via 199[11][8]); joining a listed clan sends ::joinclan
+    // <name>
+#define ORSC_CLAN_BROWSE_MAX 32
+    int orsc_clan_browse_count;
+    char orsc_clan_browse_names[ORSC_CLAN_BROWSE_MAX][33];
+    char orsc_clan_browse_tags[ORSC_CLAN_BROWSE_MAX][9];
+    int orsc_clan_browse_members[ORSC_CLAN_BROWSE_MAX];
+    int orsc_clan_browse_can_join[ORSC_CLAN_BROWSE_MAX];
+    int orsc_clan_browse_points[ORSC_CLAN_BROWSE_MAX];
+    // backing storage for the invite popup's confirm-dialog lines
+    char orsc_clan_invite_top[80];
+    char orsc_clan_invite_bottom[80];
+
+    // OpenRSC custom parties (SEND_PARTY 116): actionId 0 = snapshot, 1 = left/cleared, 2 = invite popup; snapshot
+    // keyed by leader name
+#define ORSC_PARTY_MEMBERS_MAX 16
+    int orsc_party_in;
+    char orsc_party_leader[33];
+    int orsc_party_is_leader;
+    int orsc_party_size;
+    char orsc_party_member_names[ORSC_PARTY_MEMBERS_MAX][33];
+    int orsc_party_member_online[ORSC_PARTY_MEMBERS_MAX];
+    int orsc_party_member_cur_hits[ORSC_PARTY_MEMBERS_MAX];
+    int orsc_party_member_max_hits[ORSC_PARTY_MEMBERS_MAX];
+    int orsc_party_member_combat[ORSC_PARTY_MEMBERS_MAX];
+    // remaining party-snapshot status bytes for the party HUD: rank (1 = leader crown), skulled, in combat
+    int orsc_party_member_rank[ORSC_PARTY_MEMBERS_MAX];
+    int orsc_party_member_skull[ORSC_PARTY_MEMBERS_MAX];
+    int orsc_party_member_in_combat[ORSC_PARTY_MEMBERS_MAX];
+    // render frames left of the recent-damage flash; while set the HP bar shows red only
+    int orsc_party_member_flash[ORSC_PARTY_MEMBERS_MAX];
+    char orsc_party_invite_top[80];
+    char orsc_party_invite_bottom[80];
+    int orsc_party_settings[5]; // SEND_PARTY actionId 3: 3 settings + 2 allowed
+
+    // small custom-only states: SEND_IRONMAN 113 (mode/restriction; actionId 1/2 shows/hides the selection UI) +
+    // SEND_ON_TUTORIAL 111
+    int orsc_ironman_type;
+    int orsc_ironman_restriction;
+    int orsc_on_tutorial;
+    int show_dialog_ironman;
+
+    // OpenRSC custom auction house (opcode 132); rows past the cap are parsed but dropped and counted in _overflow;
+    // cap 512 rows
+#define ORSC_AUCTION_MAX 512
+    int orsc_auction_visible;
+    int orsc_auction_count;
+    int orsc_auction_overflow;
+    int orsc_auction_scroll;
+    int orsc_auction_selected;
+    int orsc_auction_ids[ORSC_AUCTION_MAX];
+    int orsc_auction_item_ids[ORSC_AUCTION_MAX];
+    int orsc_auction_amounts[ORSC_AUCTION_MAX];
+    int orsc_auction_prices[ORSC_AUCTION_MAX];
+    int orsc_auction_mine[ORSC_AUCTION_MAX];
+    char orsc_auction_sellers[ORSC_AUCTION_MAX][33];
+    int orsc_auction_hours[ORSC_AUCTION_MAX];
+    int orsc_auction_sell_mode; // armed by [Sell], next inventory right-click offers Auction
+    int orsc_auction_create_item;
+    int orsc_auction_create_amount;
+    int orsc_auction_offer_stage; // AUCTION_OFFER_* in ui/auction.h
+
+    // OpenRSC custom kill feed (SEND_KILL_ANNOUNCEMENT 118): top-right ticker, newest first, max 10 rows, 8s TTL;
+    // killType = killing weapon item id (-1 ranged, -2 magic)
+#define ORSC_KILL_FEED_MAX 10
+#define ORSC_KILL_FEED_TTL 400 // 8s at 50 engine ticks/s
+    struct {
+        char killer[33];
+        char victim[33];
+        int kill_type;
+        int ticks_left;
+    } orsc_kill_feed[ORSC_KILL_FEED_MAX];
+    int orsc_kill_feed_count;
+
+    // SEND_ON_BLACK_HOLE 115: boolean; only effect is a taller chat-box backing, no interface
+    int orsc_black_hole;
+
+    // SEND_UNLOCKED_APPEARANCES 250: which skin colours the account may pick; only skin bits stored; default = five
+    // original RSC skins unlocked, rest locked
+    int8_t orsc_unlocked_skin[PLAYER_SKIN_COLOUR_COUNT];
+    int orsc_unlocked_skin_known;
+
+    // OpenRSC rank crown for the message being shown; set by the rich-chat handler (SERVER_MESSAGE 131), consumed and
+    // cleared when the chat entry is added; first line only
+    int orsc_pending_crown;
+
+    // SEND_OPENPK_POINTS_TO_GP_RATIO 144: opens the points->GP exchange (OpenPK world)
+    int orsc_show_points_to_gp;
+
+    // SEND_FISHING_TRAWLER 133: action 0 show / 1 variables / 2 hide;
+    // variables = water u16, fish u16, minutes u8, netRipped u8
+    int orsc_trawler_visible;
+    int orsc_trawler_water;
+    int orsc_trawler_fish;
+    int orsc_trawler_minutes;
+    int orsc_trawler_net_ripped;
+
+#ifdef WITH_SINGLEPLAYER
+    // LAN/ad-hoc co-op join state; spnet_address holds the scanned co-op world's spnet_world_info.address for
+    // spnet_connect(); cleared when a preset or single-player world is selected
+    int spnet_guest; // 1 = the selected world is a scanned co-op guest join
+    char spnet_address[64]; // spnet_world_info.address of the selected world
+#endif
 };
 
 void mudclient_new(mudclient *mud);
@@ -1116,6 +1576,8 @@ void mudclient_load_sounds(mudclient *mud);
 GameModel *mudclient_create_wall_object(mudclient *mud, int x, int y,
                                         int direction, int id, int count);
 int mudclient_load_next_region(mudclient *mud, int lx, int ly);
+void mudclient_region_proximity_check(mudclient *mud);
+void mudclient_gl_bake_cancel(mudclient *mud);
 
 GameCharacter *mudclient_add_character(mudclient *mud,
                                        GameCharacter **character_server,
@@ -1138,6 +1600,11 @@ void mudclient_handle_game_input(mudclient *mud);
 void mudclient_handle_inputs(mudclient *mud);
 void mudclient_update_object_animation(mudclient *mud, int object_index,
                                        char *model_name);
+#ifndef REVISION_177
+// OpenRSC floating name/clan-tag overlay (custom-online, players only)
+void mudclient_draw_character_nametag(mudclient *mud, GameCharacter *player,
+                                      int x, int y, int width);
+#endif
 void mudclient_draw_character_message(mudclient *mud, GameCharacter *character,
                                       int x, int y, int width);
 void mudclient_draw_character_damage(mudclient *mud, GameCharacter *character,
@@ -1158,6 +1625,9 @@ void mudclient_draw_ui(mudclient *mud);
 int mudclient_compare_text(const void *v1, const void *v2);
 void mudclient_draw_overhead(mudclient *mud);
 void mudclient_animate_objects(mudclient *mud);
+#ifdef RENDER_GL
+void mudclient_gl_bake_region_objects(mudclient *mud);
+#endif
 void mudclient_draw_entity_sprites(mudclient *mud);
 void mudclient_draw_game(mudclient *mud);
 void mudclient_reset_game(mudclient *mud);
@@ -1172,15 +1642,25 @@ void mudclient_update_fov(mudclient *mud);
 #endif
 void mudclient_start_game(mudclient *mud);
 void mudclient_draw(mudclient *mud);
+
 #ifdef SDL12
 void mudclient_sdl1_on_resize(mudclient *mud, int width, int height);
 #endif
 void mudclient_on_resize(mudclient *mud);
 void mudclient_poll_events(mudclient *mud);
 int mudclient_is_touch(mudclient *mud);
+// may this account pick skin colour `index`? five original RSC skins always, rest only via SEND_UNLOCKED_APPEARANCES
+// (250)
+int mudclient_is_skin_colour_unlocked(mudclient *mud, int index);
 void mudclient_trigger_keyboard(mudclient *mud, char *text, int is_password,
                                 int x, int y, int width, int height, int font,
                                 int is_centred);
+#ifdef __vita__
+void vita_ime_open(const char *title, const char *initial, int is_password,
+                   int initial_length);
+void vita_ime_poll(mudclient *mud);
+int vita_ime_is_active(void);
+#endif
 #ifdef _3DS
 void mudclient_3ds_flush_audio(mudclient *mud);
 void mudclient_3ds_open_keyboard(mudclient *mud);
@@ -1212,7 +1692,17 @@ void mudclient_walk_to_object(mudclient *mud, int x, int y, int direction,
                               int id);
 int mudclient_is_ui_scaled(mudclient *mud);
 void mudclient_format_number_commas(mudclient *mud, int number, char *dest);
+int mudclient_option_numbers_level(mudclient *mud);
 void mudclient_format_item_amount(mudclient *mud, int item_amount, char *dest);
+
+// note helpers: mudclient_item_noted() is slot N a note (0 unless custom + S_WANT_BANK_NOTES);
+// mudclient_item_display_name() applies want_cert_as_notes
+int mudclient_item_noted(mudclient *mud, int inventory_slot);
+void mudclient_item_display_name(mudclient *mud, int item_id, int noted,
+                                 char *out, int out_size);
+// draw a noted item: certificate/note sprite, not the item icon; inset_y = 4 inventory, 7 preset
+void mudclient_draw_noted_item(mudclient *mud, int x, int y, int slot_width,
+                               int slot_height, int item_id, int inset_y);
 int mudclient_get_wilderness_depth(mudclient *mud);
 void mudclient_draw_item(mudclient *mud, int x, int y, int slot_width,
                          int slot_height, int item_id);

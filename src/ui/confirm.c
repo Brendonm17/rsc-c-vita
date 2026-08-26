@@ -69,6 +69,15 @@ void mudclient_handle_confirm_input(mudclient *mud) {
          mud->mouse_x <= cancel_x + (CONFIRM_BUTTON_SIZE / 2) &&
          mud->mouse_y >= button_y - (CONFIRM_BUTTON_SIZE / 2) &&
          mud->mouse_y <= button_y + (CONFIRM_BUTTON_SIZE / 2))) {
+#ifndef REVISION_177
+        if (mud->confirm_type == CONFIRM_CLAN_INVITE) {
+            mudclient_orsc_send_clan_action(mud, CLAN_OPTION_DECLINE_INVITE,
+                                            NULL, NULL);
+        } else if (mud->confirm_type == CONFIRM_PARTY_INVITE) {
+            mudclient_orsc_send_party_action(mud, PARTY_OPTION_DECLINE_INVITE,
+                                             NULL);
+        }
+#endif
         mud->show_dialog_confirm = 0;
     } else if (mud->mouse_x >= ok_x - (CONFIRM_BUTTON_SIZE / 2) &&
                mud->mouse_x <= ok_x + (CONFIRM_BUTTON_SIZE / 2) &&
@@ -78,6 +87,28 @@ void mudclient_handle_confirm_input(mudclient *mud) {
         case CONFIRM_TUTORIAL:
             mudclient_send_command_string(mud, "skiptutorial");
             break;
+#ifndef REVISION_177
+        case CONFIRM_CLAN_INVITE:
+            mudclient_orsc_send_clan_action(mud, CLAN_OPTION_ACCEPT_INVITE,
+                                            NULL, NULL);
+            break;
+        case CONFIRM_PARTY_INVITE:
+            mudclient_orsc_send_party_action(mud, PARTY_OPTION_ACCEPT_INVITE,
+                                             NULL);
+            break;
+        case CONFIRM_CLAN_LEADERSHIP:
+            // 199 [11] [RANK_PLAYER=6] name rank-1 (Owner transfer)
+            packet_stream_new_packet(mud->packet_stream,
+                                     CLIENT_INTERFACE_OPTIONS);
+            packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_CLAN);
+            packet_stream_put_byte(mud->packet_stream,
+                                   CLAN_OPTION_RANK_PLAYER);
+            packet_stream_put_string_newline(mud->packet_stream,
+                                             mud->orsc_clan_pending_leader);
+            packet_stream_put_byte(mud->packet_stream, 1);
+            packet_stream_send_packet(mud->packet_stream);
+            break;
+#endif
         case CONFIRM_OPTIONS_DEFAULT:
             options_set_defaults(mud->options);
             mudclient_sync_options_panels(mud);
@@ -95,8 +126,12 @@ void mudclient_handle_confirm_input(mudclient *mud) {
 #endif
 #ifdef RENDER_GL
 #ifndef SDL12
+#if defined(__vita__)
+            // panel is a fixed 960x544, do not shrink for vanilla options
+#else
             SDL_RestoreWindow(mud->gl_window);
             SDL_SetWindowSize(mud->gl_window, MUD_WIDTH, MUD_HEIGHT);
+#endif
 #endif
 #endif
 #endif

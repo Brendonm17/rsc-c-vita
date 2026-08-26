@@ -1,0 +1,14 @@
+// pick (face-tag) vertex shader (cg, psp2)
+uniform float4x4 projection_view_model;
+
+void main(
+    float3 position,
+    float2 face_tag,
+    float4 out vertex_colour : TEXCOORD0,
+    float4 out gl_Position : POSITION)
+{
+    // rsc-c uploads cglm (column-major) matrices with transpose=FALSE; the
+    // vitaGL/Cg idiom for that is vector-first mul(v, M).
+    gl_Position = mul(float4(position, 1.0f), projection_view_model);
+    vertex_colour = float4(face_tag, 0.0f, 1.0f);
+}

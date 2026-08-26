@@ -176,13 +176,18 @@ void scene_new(Scene *scene, Surface *surface, int model_count,
     scene->gl_sprite_depth_top = calloc(max_sprite_count, sizeof(float));
     scene->gl_sprite_depth_bottom = calloc(max_sprite_count, sizeof(float));
 
+    // scratch for front-to-back opaque sort
+    scene->gl_opaque_sorted_size = model_count;
+    scene->gl_opaque_sorted =
+        calloc(scene->gl_opaque_sorted_size, sizeof(GlOpaqueSortEntry));
+
     scene->gl_terrain_buffer_length = 0;
 
     scene->gl_wall_buffers = calloc(1, sizeof(gl_vertex_buffer *));
     scene->gl_wall_buffers[0] = calloc(1, sizeof(gl_vertex_buffer));
 
     game_model_gl_create_buffer(scene->gl_wall_buffers[0], WALL_OBJECTS_MAX * 4,
-                                WALL_OBJECTS_MAX * 6);
+                                WALL_OBJECTS_MAX * 6, 0);
 #endif
 
 #ifdef RENDER_GL
@@ -192,6 +197,17 @@ void scene_new(Scene *scene, Surface *surface, int model_count,
 
     shader_new(&scene->game_model_pick_shader, "./cache/pick.webgl.vs",
                "./cache/pick.webgl.fs");
+#elif defined(__vita__)
+    // precompiled GXP shaders, RGBA face-tag pick path
+    shader_new(&scene->game_model_shader, "app0:/cache/game-model.vs.gxp",
+               "app0:/cache/game-model.fs.gxp");
+
+    // no-discard variant for flat opaque models
+    shader_new(&scene->game_model_shader_noclip, "app0:/cache/game-model.vs.gxp",
+               "app0:/cache/game-model-noclip.fs.gxp");
+
+    shader_new(&scene->game_model_pick_shader, "app0:/cache/pick.vs.gxp",
+               "app0:/cache/pick.fs.gxp");
 #elif defined(OPENGL15) || defined(OPENGL20)
     shader_new(&scene->game_model_shader, "./cache/game-model.gl2.vs",
                "./cache/game-model.gl2.fs");
@@ -239,6 +255,15 @@ void scene_new(Scene *scene, Surface *surface, int model_count,
                     "romfs:/textures/model_textures.png");
 
     scene->gl_model_surface = IMG_Load("romfs:/textures/model_textures.png");
+#elif defined(__vita__)
+    gl_load_texture(&scene->gl_model_texture,
+                    "app0:/cache/textures/model_textures.png");
+
+    scene->gl_model_surface =
+        IMG_Load("app0:/cache/textures/model_textures.png");
+
+    // scan atlas alpha so opaque models skip the fragment discard
+    model_textures_compute_alpha(scene->gl_model_surface);
 #else
     gl_load_texture(&scene->gl_model_texture,
                     "./cache/textures/model_textures.png");

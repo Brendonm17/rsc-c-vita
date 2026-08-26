@@ -15,6 +15,101 @@ gl_atlas_position gl_transparent_atlas_position = {
 
 static unsigned int last_base_texture = 0;
 
+#ifdef RENDER_GL
+// combined 2D atlas dimensions: 4 columns x 2 rows of 1024px cells
+#define GL_COMBINED_ATLAS_WIDTH 4096
+#define GL_COMBINED_ATLAS_HEIGHT 2048
+#define GL_COMBINED_CELL 1024
+
+// upload one source sheet into its cell of the combined atlas (must be the currently bound GL_TEXTURE_2D). returns 1
+// on success. a missing required sheet is fatal; a missing optional one returns 0
+static int surface_gl_load_into_combined(const char *file, int x, int y,
+                                         int required) {
+    SDL_Surface *texture_image = IMG_Load(file);
+
+    if (!texture_image) {
+        if (required) {
+            mud_error("unable to load %s texture\n%s\n", file, IMG_GetError());
+            exit(1);
+        }
+
+        // an optional sheet (the custom-entity atlas) must not fail silently: a missed load turns every custom worn
+        // layer and no-body NPC invisible
+        mud_error("unable to load optional %s texture\n%s\n", file,
+                  IMG_GetError());
+        return 0;
+    }
+
+    // upload in <=1024-row bands
+    int uploaded = 0;
+
+    while (uploaded < texture_image->h) {
+        int band = texture_image->h - uploaded;
+
+        if (band > 1024) {
+            band = 1024;
+        }
+
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + uploaded, texture_image->w,
+                        band, GL_RGBA, GL_UNSIGNED_BYTE,
+                        (uint8_t *)texture_image->pixels +
+                            (size_t)uploaded * texture_image->pitch);
+
+        uploaded += band;
+    }
+
+#ifdef RENDER_GL
+    GLenum upload_error = glGetError();
+
+    if (upload_error != GL_NO_ERROR) {
+        mud_error("texture upload %s -> combined (%d,%d) GL error 0x%x\n",
+                  file, x, y, (unsigned int)upload_error);
+    }
+#endif
+
+    SDL_FreeSurface(texture_image);
+
+    return 1;
+}
+
+// remap an atlas position from a source sheet's [0,1] UV space into that sheet's cell of the combined atlas. the
+// result is clamped half a combined-atlas texel inside the cell so a border UV can't cross into the neighbouring cell. row_span 2 = a full-height (1024x2048) cell
+static gl_atlas_position surface_gl_combined_position(gl_atlas_position p,
+                                                      int col, int row,
+                                                      int row_span) {
+    float cell_u = (float)GL_COMBINED_CELL / GL_COMBINED_ATLAS_WIDTH;
+    float cell_v = (float)GL_COMBINED_CELL / GL_COMBINED_ATLAS_HEIGHT;
+
+    float offset_u = col * cell_u;
+    float offset_v = row * cell_v;
+    float span_v = row_span * cell_v;
+
+    float min_u = offset_u + 0.5f / GL_COMBINED_ATLAS_WIDTH;
+    float max_u = offset_u + cell_u - 0.5f / GL_COMBINED_ATLAS_WIDTH;
+    float min_v = offset_v + 0.5f / GL_COMBINED_ATLAS_HEIGHT;
+    float max_v = offset_v + span_v - 0.5f / GL_COMBINED_ATLAS_HEIGHT;
+
+#define GL_COMBINED_CLAMP(value, lo, hi)                                       \
+    ((value) < (lo) ? (lo) : ((value) > (hi) ? (hi) : (value)))
+
+    p.left_u = GL_COMBINED_CLAMP(offset_u + p.left_u * cell_u, min_u, max_u);
+    p.right_u = GL_COMBINED_CLAMP(offset_u + p.right_u * cell_u, min_u, max_u);
+    p.top_v = GL_COMBINED_CLAMP(offset_v + p.top_v * span_v, min_v, max_v);
+    p.bottom_v =
+        GL_COMBINED_CLAMP(offset_v + p.bottom_v * span_v, min_v, max_v);
+
+#undef GL_COMBINED_CLAMP
+
+    return p;
+}
+
+// cell coordinates of each entity sheet in the combined atlas
+static const int gl_combined_entity_col[ENTITY_TEXTURE_LENGTH] = {1, 2, 2, 0,
+                                                                  1};
+static const int gl_combined_entity_row[ENTITY_TEXTURE_LENGTH] = {0, 0, 1, 1,
+                                                                  1};
+#endif // RENDER_GL
+
 static void surface_gl_quad_new(Surface *surface, gl_quad *quad, int x, int y,
                                 int width, int height);
 #endif
@@ -28,6 +123,10 @@ void surface_gl_new(Surface *surface, int width, int height, int limit,
 #ifdef EMSCRIPTEN
     shader_new(&surface->gl_flat_shader, "./cache/flat.webgl.vs",
                "./cache/flat.webgl.fs");
+#elif defined(__vita__)
+    // Vita: precompiled GXP (offline Cg via psp2cgc), no runtime compilation
+    shader_new(&surface->gl_flat_shader, "app0:/cache/flat.vs.gxp",
+               "app0:/cache/flat.fs.gxp");
 #elif defined(OPENGL15) || defined(OPENGL20)
     shader_new(&surface->gl_flat_shader, "./cache/flat.gl2.vs",
                "./cache/flat.gl2.fs");
@@ -53,8 +152,43 @@ void surface_gl_new(Surface *surface, int width, int height, int limit,
     C3D_BindProgram(&surface->_3ds_gl_flat_shader);
 #endif
 
+    // the Surface is malloc'd: this embedded struct starts as garbage, and
+    // vertex_buffer_gl_new's re-create check reads it
+    memset(&surface->gl_flat_buffer, 0, sizeof(surface->gl_flat_buffer));
+
     vertex_buffer_gl_new(&surface->gl_flat_buffer, sizeof(gl_quad_vertex),
                          GL_MAX_QUADS * 4, GL_MAX_QUADS * 6);
+
+#ifdef RENDER_GL
+    // client-side staging; see the field's comment in surface.h.
+    surface->gl_flat_staging = calloc(GL_MAX_QUADS, sizeof(gl_quad));
+    surface->gl_flat_uploaded = 0;
+
+    // the quad->triangle index pattern (0,1,2, 0,2,3 per quad) never changes: upload the whole element buffer once.
+    // 16-bit indices: the max vertex index is GL_MAX_QUADS*4 - 1 (8191 for GL_MAX_QUADS = 2048), fits a GLushort
+    {
+        GLushort *static_indices = malloc(GL_MAX_QUADS * 6 * sizeof(GLushort));
+
+        if (static_indices != NULL) {
+            for (int i = 0; i < GL_MAX_QUADS; i++) {
+                GLushort base = i * 4;
+
+                static_indices[i * 6] = base;
+                static_indices[i * 6 + 1] = base + 1;
+                static_indices[i * 6 + 2] = base + 2;
+                static_indices[i * 6 + 3] = base;
+                static_indices[i * 6 + 4] = base + 2;
+                static_indices[i * 6 + 5] = base + 3;
+            }
+
+            vertex_buffer_gl_bind(&surface->gl_flat_buffer);
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                            GL_MAX_QUADS * 6 * sizeof(GLushort), static_indices);
+
+            free(static_indices);
+        }
+    }
+#endif
 
     int attribute_offset = 0;
 
@@ -76,27 +210,75 @@ void surface_gl_new(Surface *surface, int width, int height, int limit,
 
 #ifdef RENDER_GL
 #ifdef __SWITCH__
-    gl_load_texture(&surface->gl_sprite_texture, "romfs:/textures/sprites.png");
+#define GL_TEXTURE_DIR "romfs:/textures/"
+#elif defined(__vita__)
+#define GL_TEXTURE_DIR "app0:/cache/textures/"
 #else
-    gl_load_texture(&surface->gl_sprite_texture,
-                    "./cache/textures/sprites.png");
+#define GL_TEXTURE_DIR "./cache/textures/"
 #endif
 
-    for (int i = 0; i < ENTITY_TEXTURE_LENGTH; i++) {
-        char filename[32] = {0};
-#ifdef __SWITCH__
-        sprintf(filename, "romfs:/textures/entities_%d.png", i);
-#else
-        sprintf(filename, "./cache/textures/entities_%d.png", i);
-#endif
+    // combined 2D atlas: the sprite sheet, the five entity sheets and the optional custom-entity sheet are packed
+    // into one 4096x2048 texture as 1024px cells, so nearly every 2D quad shares a single texture pair and batches into one draw call. cell layout (col,row): sprites (0,0) entities_0 (1,0) entities_1 (2,0) entities_3 (0,1) entities_4 (1,1) entities_2 (2,1) custom_entities column 3 full 2048 height
+    {
+        GLuint combined = 0;
+        gl_create_texture(&combined);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GL_COMBINED_ATLAS_WIDTH,
+                     GL_COMBINED_ATLAS_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                     NULL);
 
-        gl_load_texture(&surface->gl_entity_textures[i], filename);
+        surface_gl_load_into_combined(GL_TEXTURE_DIR "sprites.png", 0, 0, 1);
+
+        static const int entity_cell_x[ENTITY_TEXTURE_LENGTH] = {1024, 2048,
+                                                                 2048, 0, 1024};
+        static const int entity_cell_y[ENTITY_TEXTURE_LENGTH] = {0, 0, 1024,
+                                                                 1024, 1024};
+
+        for (int i = 0; i < ENTITY_TEXTURE_LENGTH; i++) {
+            char filename[64] = {0};
+            sprintf(filename, GL_TEXTURE_DIR "entities_%d.png", i);
+
+            surface_gl_load_into_combined(filename, entity_cell_x[i],
+                                          entity_cell_y[i], 1);
+
+            surface->gl_entity_textures[i] = combined;
+        }
+
+        surface->gl_sprite_texture = combined;
+
+        // optional OpenRSC custom worn-equipment layers and no-body NPC bodies; if the sheet is absent the texture id
+        // stays 0 and the custom-entity draw branch is skipped
+        surface->gl_custom_entity_texture = 0;
+
+        if (surface_gl_load_into_combined(
+                GL_TEXTURE_DIR "custom_entities.png", 3072, 0, 0)) {
+            surface->gl_custom_entity_texture = combined;
+            // positive confirmation in the log
+            mud_error("[gfx] custom entity sheet loaded\n");
+        }
+    }
+
+    // optional separate atlas for OpenRSC custom item icons (1024x512, does not fit the combined atlas); if absent
+    // the texture id stays 0 and the custom-sprite draw branch is skipped
+    surface->gl_custom_texture = 0;
+    {
+        const char *custom_path = GL_TEXTURE_DIR "custom_sprites.png";
+
+        FILE *custom_fp = fopen(custom_path, "rb");
+        if (custom_fp != NULL) {
+            fclose(custom_fp);
+            gl_load_texture(&surface->gl_custom_texture, (char *)custom_path);
+        }
     }
 
     surface->gl_dynamic_texture_buffer =
         calloc(1024 * 1024 * 3, sizeof(uint8_t));
 
     gl_create_texture(&surface->gl_dynamic_texture);
+
+    // size the storage once so updates can use glTexSubImage2D instead of a full glTexImage2D reallocation
+    glBindTexture(GL_TEXTURE_2D, surface->gl_dynamic_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1024, 1024, 0, GL_RGB,
+                 GL_UNSIGNED_BYTE, NULL);
 #elif defined(RENDER_3DS_GL)
     surface->_3ds_gl_projection_uniform = shaderInstanceGetUniformLocation(
         (&surface->_3ds_gl_flat_shader)->vertexShader, "projection");
@@ -139,6 +321,7 @@ float surface_gl_translate_y(Surface *surface, int y) {
 
 void surface_gl_reset_context(Surface *surface) {
     surface->gl_flat_count = 0;
+    surface->gl_flat_uploaded = 0;
 
 #ifdef RENDER_GL
     surface->gl_contexts[0].texture = surface->gl_sprite_texture;
@@ -156,6 +339,10 @@ void surface_gl_reset_context(Surface *surface) {
     surface->gl_contexts[0].max_y = surface->bounds_max_y;
 
     surface->gl_contexts[0].use_depth = 0;
+
+#ifdef RENDER_GL
+    surface->gl_contexts[0].scissored = 0;
+#endif
 
     surface->gl_context_count = 1;
 }
@@ -252,6 +439,90 @@ void surface_gl_quad_apply_base_atlas(gl_quad *quad,
 #endif
 }
 
+#if defined(__vita__) && defined(RENDER_GL)
+// inset an atlas cell's UV rect by half a texel on each edge so GL_NEAREST never samples the shared boundary with the
+// neighbouring cell. insets left/right and top/bottom symmetrically, so it stays correct before the optional flip swap. cells only ~1 texel wide/tall collapse to the cell centre instead. Vita/RENDER_GL only
+static gl_atlas_position
+surface_gl_inset_atlas_position(gl_atlas_position position) {
+    const float inset = 0.5f / 1024.0f;
+
+    // horizontal
+    if (fabsf(position.right_u - position.left_u) > 2.0f * inset) {
+        if (position.left_u <= position.right_u) {
+            position.left_u += inset;
+            position.right_u -= inset;
+        } else {
+            position.left_u -= inset;
+            position.right_u += inset;
+        }
+    } else {
+        float centre_u = (position.left_u + position.right_u) * 0.5f;
+        position.left_u = centre_u;
+        position.right_u = centre_u;
+    }
+
+    // vertical
+    if (fabsf(position.bottom_v - position.top_v) > 2.0f * inset) {
+        if (position.top_v <= position.bottom_v) {
+            position.top_v += inset;
+            position.bottom_v -= inset;
+        } else {
+            position.top_v -= inset;
+            position.bottom_v += inset;
+        }
+    } else {
+        float centre_v = (position.top_v + position.bottom_v) * 0.5f;
+        position.top_v = centre_v;
+        position.bottom_v = centre_v;
+    }
+
+    return position;
+}
+
+// nudge only the top+left edges of a glyph cell inward by a tiny fraction of a texel, leaving bottom/right on the
+// cell boundary
+static gl_atlas_position
+surface_gl_inset_glyph_top_left(gl_atlas_position position) {
+    // inset all four edges toward the cell centre by a quarter-texel
+    const float nudge = (1.0f / 4.0f) / 1024.0f;
+
+    if (position.left_u < position.right_u) {
+        position.left_u += nudge;
+        position.right_u -= nudge;
+    } else {
+        position.left_u -= nudge;
+        position.right_u += nudge;
+    }
+
+    if (position.top_v < position.bottom_v) {
+        position.top_v += nudge;
+        position.bottom_v -= nudge;
+    } else {
+        position.top_v -= nudge;
+        position.bottom_v += nudge;
+    }
+
+    return position;
+}
+#endif
+
+#ifdef RENDER_GL
+// UV rect of a captured login background sprite in the 1024x1024 atlas
+gl_atlas_position surface_gl_login_atlas_position(Surface *surface,
+                                                  int sprite_id) {
+    int width = surface->sprite_width[sprite_id];
+    int height = surface->sprite_height[sprite_id];
+    int offset_x = MINIMAP_SPRITE_WIDTH;
+    int offset_y = (sprite_id - surface->mud->sprite_logo) * height;
+
+    gl_atlas_position position = {
+        offset_x / 1024.0f, (offset_x + width) / 1024.0f, offset_y / 1024.0f,
+        (offset_y + height) / 1024.0f};
+
+    return position;
+}
+#endif
+
 void surface_gl_vertex_apply_colour(gl_quad_vertex *vertices, int length,
                                     int colour, int alpha) {
     float r = ((colour >> 16) & 0xff) / 255.0f;
@@ -290,6 +561,115 @@ void gl_vertex_apply_rotation(float *x, float *y, float centre_x,
 }
 
 #ifdef RENDER_GL
+// clip an axis-aligned quad against the current surface bounds on the CPU; returns 0 when the quad is entirely
+// outside
+static int surface_gl_clip_quad_to_bounds(Surface *surface, gl_quad *quad) {
+    float bx0 = surface_gl_translate_x(surface, surface->bounds_min_x);
+    float bx1 = surface_gl_translate_x(surface, surface->bounds_max_x);
+    float by0 = surface_gl_translate_y(surface, surface->bounds_min_y);
+    float by1 = surface_gl_translate_y(surface, surface->bounds_max_y);
+
+    // order the clip window per axis (translate_y flips the y direction)
+    float cx0 = bx0 < bx1 ? bx0 : bx1;
+    float cx1 = bx0 < bx1 ? bx1 : bx0;
+    float cy0 = by0 < by1 ? by0 : by1;
+    float cy1 = by0 < by1 ? by1 : by0;
+
+    float qxa = quad->top_left.x, qxb = quad->top_right.x;
+    float qya = quad->top_left.y, qyb = quad->bottom_left.y;
+
+    float qx0 = qxa < qxb ? qxa : qxb, qx1 = qxa < qxb ? qxb : qxa;
+    float qy0 = qya < qyb ? qya : qyb, qy1 = qya < qyb ? qyb : qya;
+
+    // fully inside (the overwhelmingly common case): untouched
+    if (qx0 >= cx0 && qx1 <= cx1 && qy0 >= cy0 && qy1 <= cy1) {
+        return 1;
+    }
+
+    // fully outside: nothing of it would have been drawn
+    if (qx1 <= cx0 || qx0 >= cx1 || qy1 <= cy0 || qy0 >= cy1) {
+        return 0;
+    }
+
+    // partial overlap: clamp each vertex and re-derive u/v from the original edges
+    gl_quad orig = *quad;
+
+    float inv_w = (orig.top_right.x != orig.top_left.x)
+                      ? 1.0f / (orig.top_right.x - orig.top_left.x)
+                      : 0.0f;
+    float inv_h = (orig.bottom_left.y != orig.top_left.y)
+                      ? 1.0f / (orig.bottom_left.y - orig.top_left.y)
+                      : 0.0f;
+
+    gl_quad_vertex *vertices = (gl_quad_vertex *)quad;
+
+    for (int i = 0; i < 4; i++) {
+        float nx = vertices[i].x;
+        float ny = vertices[i].y;
+
+        if (nx < cx0) {
+            nx = cx0;
+        } else if (nx > cx1) {
+            nx = cx1;
+        }
+
+        if (ny < cy0) {
+            ny = cy0;
+        } else if (ny > cy1) {
+            ny = cy1;
+        }
+
+        if (nx != vertices[i].x) {
+            float t = (nx - orig.top_left.x) * inv_w;
+
+            vertices[i].u =
+                orig.top_left.u + (orig.top_right.u - orig.top_left.u) * t;
+
+            vertices[i].base_u =
+                orig.top_left.base_u +
+                (orig.top_right.base_u - orig.top_left.base_u) * t;
+
+            vertices[i].r =
+                orig.top_left.r + (orig.top_right.r - orig.top_left.r) * t;
+            vertices[i].g =
+                orig.top_left.g + (orig.top_right.g - orig.top_left.g) * t;
+            vertices[i].b =
+                orig.top_left.b + (orig.top_right.b - orig.top_left.b) * t;
+            vertices[i].a =
+                orig.top_left.a + (orig.top_right.a - orig.top_left.a) * t;
+
+            vertices[i].x = nx;
+        }
+
+        if (ny != vertices[i].y) {
+            float t = (ny - orig.top_left.y) * inv_h;
+
+            vertices[i].v =
+                orig.top_left.v + (orig.bottom_left.v - orig.top_left.v) * t;
+
+            vertices[i].base_v =
+                orig.top_left.base_v +
+                (orig.bottom_left.base_v - orig.top_left.base_v) * t;
+
+            // per-axis colour lerp: exact for gradient quads, no-op for constant-colour quads
+            vertices[i].r =
+                orig.top_left.r + (orig.bottom_left.r - orig.top_left.r) * t;
+            vertices[i].g =
+                orig.top_left.g + (orig.bottom_left.g - orig.top_left.g) * t;
+            vertices[i].b =
+                orig.top_left.b + (orig.bottom_left.b - orig.top_left.b) * t;
+            vertices[i].a =
+                orig.top_left.a + (orig.bottom_left.a - orig.top_left.a) * t;
+
+            vertices[i].y = ny;
+        }
+    }
+
+    return 1;
+}
+#endif
+
+#ifdef RENDER_GL
 void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, GLuint texture,
                             GLuint base_texture) {
 #elif defined(RENDER_3DS_GL)
@@ -310,16 +690,26 @@ void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, C3D_Tex *texture,
     int ebo_index = surface->gl_flat_count * 4;
 
 #ifdef RENDER_GL
-    vertex_buffer_gl_bind(&surface->gl_flat_buffer);
+    (void)ebo_index;
+    (void)vertex_offset;
 
-    glBufferSubData(GL_ARRAY_BUFFER, vertex_offset, sizeof(gl_quad), quad);
+    // axis-aligned quads (sprites, glyphs, boxes) get clipped against the current bounds here; rotated and skewed
+    // quads keep the scissored path
+    int axis_aligned = quad->top_left.x == quad->bottom_left.x &&
+                       quad->top_right.x == quad->bottom_right.x &&
+                       quad->top_left.y == quad->top_right.y &&
+                       quad->bottom_left.y == quad->bottom_right.y;
 
-    GLuint indices[] = {ebo_index, ebo_index + 1, ebo_index + 2,
-                        ebo_index, ebo_index + 2, ebo_index + 3};
+    int needs_scissor = !axis_aligned;
 
-    glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,
-                    surface->gl_flat_count * sizeof(indices), sizeof(indices),
-                    indices);
+    if (axis_aligned && !surface_gl_clip_quad_to_bounds(surface, quad)) {
+        return; // fully outside the bounds
+    }
+
+    // accumulate into the client-side staging buffer only
+    memcpy(&surface->gl_flat_staging[surface->gl_flat_count], quad,
+           sizeof(gl_quad));
+
 #elif defined(RENDER_3DS_GL)
     memcpy(surface->gl_flat_buffer.vbo + vertex_offset, quad, sizeof(gl_quad));
 
@@ -336,6 +726,38 @@ void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, C3D_Tex *texture,
     int context_index = surface->gl_context_count - 1;
     SurfaceGlContext *context = &surface->gl_contexts[context_index];
 
+#ifdef RENDER_GL
+    // a context = one glDrawElements at flush; splits on a state change: texture, base texture, depth mode, or
+    // entering/leaving the scissored path
+    int use_depth = quad->bottom_left.z != 0;
+
+    if (context->use_depth == use_depth &&
+        context->scissored == needs_scissor && context->texture == texture &&
+        context->base_texture == base_texture &&
+        (!needs_scissor || (context->min_x == surface->bounds_min_x &&
+                            context->max_x == surface->bounds_max_x &&
+                            context->min_y == surface->bounds_min_y &&
+                            context->max_y == surface->bounds_max_y))) {
+        context->quad_count++;
+    } else {
+        context = &surface->gl_contexts[context_index + 1];
+
+        context->min_x = surface->bounds_min_x;
+        context->max_x = surface->bounds_max_x;
+        context->min_y = surface->bounds_min_y;
+        context->max_y = surface->bounds_max_y;
+
+        context->texture = texture;
+        context->base_texture = base_texture;
+
+        context->use_depth = use_depth;
+        context->scissored = needs_scissor;
+
+        context->quad_count = 1;
+
+        surface->gl_context_count++;
+    }
+#else
     if (context->use_depth == 0 && quad->bottom_left.z == 0 &&
         context->min_x == surface->bounds_min_x &&
         context->max_x == surface->bounds_max_x &&
@@ -360,6 +782,7 @@ void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, C3D_Tex *texture,
 
         surface->gl_context_count++;
     }
+#endif
 }
 
 void surface_gl_buffer_box(Surface *surface, int x, int y, int width,
@@ -367,8 +790,19 @@ void surface_gl_buffer_box(Surface *surface, int x, int y, int width,
     gl_quad quad = {0};
 
     surface_gl_quad_new(surface, &quad, x, y, width, height);
+
+#ifdef RENDER_GL
+    surface_gl_quad_apply_atlas(
+        &quad, surface_gl_combined_position(gl_white_atlas_position, 0, 0, 1),
+        0);
+    surface_gl_quad_apply_base_atlas(
+        &quad,
+        surface_gl_combined_position(gl_transparent_atlas_position, 0, 0, 1),
+        0);
+#else
     surface_gl_quad_apply_atlas(&quad, gl_white_atlas_position, 0);
     surface_gl_quad_apply_base_atlas(&quad, gl_transparent_atlas_position, 0);
+#endif
     surface_gl_vertex_apply_colour((gl_quad_vertex *)(&quad), 4, colour, alpha);
 
 #ifdef RENDER_GL
@@ -416,8 +850,22 @@ void surface_gl_buffer_character(Surface *surface, char character, int x, int y,
         draw_shadow ? gl_font_shadow_atlas_positions[font_id][char_set_index]
                     : gl_font_atlas_positions[font_id][char_set_index];
 
+#if defined(__vita__) && defined(RENDER_GL)
+    // pull the top+left edges in by ~1/16 texel
+    atlas_position = surface_gl_inset_glyph_top_left(atlas_position);
+#endif
+
+#ifdef RENDER_GL
+    surface_gl_quad_apply_atlas(
+        &quad, surface_gl_combined_position(atlas_position, 0, 0, 1), 0);
+    surface_gl_quad_apply_base_atlas(
+        &quad,
+        surface_gl_combined_position(gl_transparent_atlas_position, 0, 0, 1),
+        0);
+#else
     surface_gl_quad_apply_atlas(&quad, atlas_position, 0);
     surface_gl_quad_apply_base_atlas(&quad, gl_transparent_atlas_position, 0);
+#endif
 
     surface_gl_vertex_apply_colour((gl_quad_vertex *)(&quad), 4, colour, 255);
     surface_gl_vertex_apply_depth((gl_quad_vertex *)(&quad), 4, depth);
@@ -447,38 +895,38 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
     gl_atlas_position atlas_position = gl_transparent_atlas_position;
     gl_atlas_position base_atlas_position = gl_transparent_atlas_position;
 
+#ifdef RENDER_GL
+    // combined-atlas cell for each side of the quad; col -1 = handle outside the atlas, UVs stay as-is
+    int tex_col = 0, tex_row = 0, tex_span = 1;
+    int base_col = 0, base_row = 0, base_span = 1;
+#endif
+
     if (sprite_id == SPRITE_LIMIT - 1) {
         atlas_position = gl_logo_atlas_position;
     } else if (sprite_id == surface->mud->sprite_logo) {
 #ifdef RENDER_GL
-        gl_atlas_position test = {MINIMAP_SPRITE_WIDTH / 1024.0f,
-                                  (MINIMAP_SPRITE_WIDTH + 512) / 1024.0f, 0.0f,
-                                  200.0f / 1024.0f};
-
+        atlas_position =
+            surface_gl_login_atlas_position(surface, sprite_id);
         texture = surface->gl_dynamic_texture;
-        atlas_position = test;
+        tex_col = -1;
 #elif defined(RENDER_3DS_GL)
         atlas_position = gl_login_atlas_positions[0];
 #endif
     } else if (sprite_id == surface->mud->sprite_logo + 1) {
 #ifdef RENDER_GL
-        gl_atlas_position test = {MINIMAP_SPRITE_WIDTH / 1024.0f,
-                                  (MINIMAP_SPRITE_WIDTH + 512) / 1024.0f,
-                                  200 / 1024.0f, (200 + 200.0f) / 1024.0f};
-
+        atlas_position =
+            surface_gl_login_atlas_position(surface, sprite_id);
         texture = surface->gl_dynamic_texture;
-        atlas_position = test;
+        tex_col = -1;
 #elif defined(RENDER_3DS_GL)
         atlas_position = gl_login_atlas_positions[1];
 #endif
     } else if (sprite_id == surface->mud->sprite_logo + 2) {
 #ifdef RENDER_GL
-        gl_atlas_position test = {MINIMAP_SPRITE_WIDTH / 1024.0f,
-                                  (MINIMAP_SPRITE_WIDTH + 512) / 1024.0f,
-                                  400 / 1024.0f, 600.0f / 1024.0f};
-
+        atlas_position =
+            surface_gl_login_atlas_position(surface, sprite_id);
         texture = surface->gl_dynamic_texture;
-        atlas_position = test;
+        tex_col = -1;
 #elif defined(RENDER_3DS_GL)
         atlas_position = gl_login_atlas_positions[2];
 #endif
@@ -490,6 +938,7 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
             (float)(SLEEP_HEIGHT + MINIMAP_SPRITE_HEIGHT) / 1024.0f};
 
         base_texture = surface->gl_dynamic_texture;
+        base_col = -1;
         base_atlas_position = test;
 #elif defined(RENDER_3DS_GL)
         atlas_position = gl_map_atlas_position;
@@ -503,6 +952,8 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
         if (texture_index >= 0) {
 #ifdef RENDER_GL
             texture = surface->gl_entity_textures[texture_index];
+            tex_col = gl_combined_entity_col[texture_index];
+            tex_row = gl_combined_entity_row[texture_index];
 #elif defined(RENDER_3DS_GL)
             texture = &surface->gl_entity_textures[texture_index];
 #endif
@@ -528,11 +979,50 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
         if (base_texture_index >= 0) {
 #ifdef RENDER_GL
             base_texture = surface->gl_entity_textures[base_texture_index];
+            base_col = gl_combined_entity_col[base_texture_index];
+            base_row = gl_combined_entity_row[base_texture_index];
 #elif defined(RENDER_3DS_GL)
             base_texture = &surface->gl_entity_textures[base_texture_index];
 #endif
             base_atlas_position = base_texture_position.atlas_position;
         }
+    } else if (surface->gl_custom_texture != 0 &&
+               sprite_id >= surface->mud->sprite_item + GL_CUSTOM_SPRITE_BASE &&
+               sprite_id < surface->mud->sprite_item + GL_CUSTOM_SPRITE_BASE +
+                               GL_CUSTOM_SPRITE_COUNT) {
+        // OpenRSC custom item icon: sampled from the separate custom atlas.
+        int custom_index =
+            sprite_id - (surface->mud->sprite_item + GL_CUSTOM_SPRITE_BASE);
+
+        texture = surface->gl_custom_texture;
+        base_texture = surface->gl_custom_texture;
+        atlas_position = gl_custom_atlas_positions[custom_index];
+        base_atlas_position = gl_transparent_atlas_position;
+#ifdef RENDER_GL
+        tex_col = -1;
+        base_col = -1;
+#endif
+    } else if (surface->gl_custom_entity_texture != 0 &&
+               sprite_id >= GL_CUSTOM_ENTITY_FILE_BASE &&
+               sprite_id < GL_CUSTOM_ENTITY_FILE_BASE +
+                               GL_CUSTOM_ENTITY_SLOT_COUNT) {
+        // OpenRSC custom worn-equipment layer / no-body NPC body: a layered animation frame in the custom-entity
+        // range, sampled from the custom-entity atlas
+        int custom_entity_index = sprite_id - GL_CUSTOM_ENTITY_FILE_BASE;
+
+        texture = surface->gl_custom_entity_texture;
+        base_texture = surface->gl_custom_entity_texture;
+        atlas_position = gl_custom_entity_atlas_positions[custom_entity_index];
+        base_atlas_position = gl_transparent_atlas_position;
+#ifdef RENDER_GL
+        // the custom-entity sheet is the full-height column 3 cell
+        tex_col = 3;
+        tex_row = 0;
+        tex_span = 2;
+        base_col = 3;
+        base_row = 0;
+        base_span = 2;
+#endif
     } else if (sprite_id >= surface->mud->sprite_media &&
                sprite_id < surface->mud->sprite_projectile +
                                game_data.projectile_sprite) {
@@ -543,6 +1033,7 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
     } else if (sprite_id == surface->mud->sprite_texture + 1) {
 #ifdef RENDER_GL
         base_texture = surface->gl_dynamic_texture;
+        base_col = -1;
 
         gl_atlas_position test = {0.0f, (float)SLEEP_WIDTH / 1024.0f, 0.0f,
                                   (float)SLEEP_HEIGHT / 1024.0f};
@@ -659,6 +1150,25 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
 #endif
     }
 
+#if defined(__vita__) && defined(RENDER_GL)
+    // half-texel inset applied to both the greyscale and base UVs
+    atlas_position = surface_gl_inset_atlas_position(atlas_position);
+    base_atlas_position = surface_gl_inset_atlas_position(base_atlas_position);
+#endif
+
+#ifdef RENDER_GL
+    // remap sheet-local UVs into the sheet's combined-atlas cell
+    if (tex_col >= 0) {
+        atlas_position = surface_gl_combined_position(atlas_position, tex_col,
+                                                      tex_row, tex_span);
+    }
+
+    if (base_col >= 0) {
+        base_atlas_position = surface_gl_combined_position(
+            base_atlas_position, base_col, base_row, base_span);
+    }
+#endif
+
     surface_gl_quad_apply_atlas(&quad, atlas_position, flip);
     surface_gl_quad_apply_base_atlas(&quad, base_atlas_position, flip);
 
@@ -691,8 +1201,18 @@ void surface_gl_buffer_circle(Surface *surface, int x, int y, int radius,
 
     surface_gl_quad_new(surface, &quad, x, y, diameter, diameter);
 
+#ifdef RENDER_GL
+    surface_gl_quad_apply_atlas(
+        &quad, surface_gl_combined_position(gl_circle_atlas_position, 0, 0, 1),
+        0);
+    surface_gl_quad_apply_base_atlas(
+        &quad,
+        surface_gl_combined_position(gl_transparent_atlas_position, 0, 0, 1),
+        0);
+#else
     surface_gl_quad_apply_atlas(&quad, gl_circle_atlas_position, 0);
     surface_gl_quad_apply_base_atlas(&quad, gl_transparent_atlas_position, 0);
+#endif
 
     surface_gl_vertex_apply_colour((gl_quad_vertex *)(&quad), 4, colour, alpha);
     surface_gl_vertex_apply_depth((gl_quad_vertex *)(&quad), 4, depth);
@@ -711,8 +1231,19 @@ void surface_gl_buffer_gradient(Surface *surface, int x, int y, int width,
     gl_quad quad = {0};
 
     surface_gl_quad_new(surface, &quad, x, y, width, height);
+
+#ifdef RENDER_GL
+    surface_gl_quad_apply_atlas(
+        &quad, surface_gl_combined_position(gl_white_atlas_position, 0, 0, 1),
+        0);
+    surface_gl_quad_apply_base_atlas(
+        &quad,
+        surface_gl_combined_position(gl_transparent_atlas_position, 0, 0, 1),
+        0);
+#else
     surface_gl_quad_apply_atlas(&quad, gl_white_atlas_position, 0);
     surface_gl_quad_apply_base_atlas(&quad, gl_transparent_atlas_position, 0);
+#endif
 
     surface_gl_vertex_apply_colour((gl_quad_vertex *)(&quad), 2, bottom_colour,
                                    255);
@@ -828,14 +1359,28 @@ void surface_gl_apply_login_filter(Surface *surface, int sprite_id) {
 
 #if defined(RENDER_GL) && !defined(RENDER_3DS_GL)
 void surface_gl_draw(Surface *surface, GL_DEPTH_MODE depth_mode) {
-    glEnable(GL_SCISSOR_TEST);
+    // scissor test stays disabled except around contexts that need a rect (rotated/skewed quads, the minimap)
     glDisable(GL_CULL_FACE);
 
     shader_use(&surface->gl_flat_shader);
 
     vertex_buffer_gl_bind(&surface->gl_flat_buffer);
 
+    // upload every quad staged since the last flush in one batch
+    if (surface->gl_flat_count > surface->gl_flat_uploaded) {
+        int upload_count = surface->gl_flat_count - surface->gl_flat_uploaded;
+
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        surface->gl_flat_uploaded * sizeof(gl_quad),
+                        upload_count * sizeof(gl_quad),
+                        &surface->gl_flat_staging[surface->gl_flat_uploaded]);
+
+
+        surface->gl_flat_uploaded = surface->gl_flat_count;
+    }
+
     int drawn_quads = 0;
+    int scissor_on = 0;
 
     GLuint last_texture = 0;
 
@@ -846,20 +1391,47 @@ void surface_gl_draw(Surface *surface, GL_DEPTH_MODE depth_mode) {
             continue;
         }
 
-        /* don't apply UI scaling to entities that are drawn within the world */
-        int is_ui_scaled =
-            context->use_depth ? 0 : mudclient_is_ui_scaled(surface->mud);
+        if (context->scissored) {
+            // don't apply UI scaling to entities drawn within the world
+            int is_ui_scaled =
+                context->use_depth ? 0 : mudclient_is_ui_scaled(surface->mud);
 
-        int min_y = context->min_y * (is_ui_scaled + 1);
-        int max_y = context->max_y * (is_ui_scaled + 1);
-        int min_x = context->min_x * (is_ui_scaled + 1);
-        int max_x = context->max_x * (is_ui_scaled + 1);
+            int min_y = context->min_y * (is_ui_scaled + 1);
+            int max_y = context->max_y * (is_ui_scaled + 1);
+            int min_x = context->min_x * (is_ui_scaled + 1);
+            int max_x = context->max_x * (is_ui_scaled + 1);
 
-        int bounds_width = max_x - min_x;
-        int bounds_height = max_y - min_y;
+            int bounds_width = max_x - min_x;
+            int bounds_height = max_y - min_y;
 
-        glScissor(min_x, surface->mud->game_height - min_y - bounds_height,
-                  bounds_width, bounds_height);
+#ifdef __vita__
+            // scale the scissor rect from game pixels to the 960x544 panel; while capturing into the login FBO the
+            // target is 1:1 so use unscaled coords
+            if (surface->gl_capture_active) {
+                glScissor(min_x,
+                          surface->mud->game_height - min_y - bounds_height,
+                          bounds_width, bounds_height);
+            } else {
+                int gw = surface->mud->game_width,
+                    gh = surface->mud->game_height;
+                int sx0 = min_x * 960 / gw;
+                int sy0 = (gh - min_y - bounds_height) * 544 / gh;
+                glScissor(sx0, sy0, bounds_width * 960 / gw,
+                          bounds_height * 544 / gh);
+            }
+#else
+            glScissor(min_x, surface->mud->game_height - min_y - bounds_height,
+                      bounds_width, bounds_height);
+#endif
+
+            if (!scissor_on) {
+                glEnable(GL_SCISSOR_TEST);
+                scissor_on = 1;
+            }
+        } else if (scissor_on) {
+            glDisable(GL_SCISSOR_TEST);
+            scissor_on = 0;
+        }
 
         GLuint texture = context->texture;
 
@@ -881,13 +1453,16 @@ void surface_gl_draw(Surface *surface, GL_DEPTH_MODE depth_mode) {
 
         int quad_count = context->quad_count;
 
-        glDrawElements(GL_TRIANGLES, quad_count * 6, GL_UNSIGNED_INT,
-                       (void *)(drawn_quads * 6 * sizeof(GLuint)));
+        glDrawElements(GL_TRIANGLES, quad_count * 6, GL_UNSIGNED_SHORT,
+                       (void *)(drawn_quads * 6 * sizeof(GLushort)));
+
 
         drawn_quads += quad_count;
     }
 
-    glDisable(GL_SCISSOR_TEST);
+    if (scissor_on) {
+        glDisable(GL_SCISSOR_TEST);
+    }
 
     if (depth_mode == GL_DEPTH_BOTH) {
         surface_gl_reset_context(surface);
@@ -905,12 +1480,22 @@ void surface_gl_raster_to_sprite(Surface *surface, int sprite_id, int x,
     int offset_y = (sprite_id - surface->mud->sprite_logo) * height;
     int offset_x = MINIMAP_SPRITE_WIDTH;
 
+    // login backdrop is a banner `width` px wide captured from the centre of the game_width-wide FBO; no-op when
+    // game_width == width
+    int src_x0 = (surface->mud->game_width - width) / 2;
+
+    if (src_x0 < 0) {
+        src_x0 = 0;
+    }
+
+    // glReadPixels returns bottom-up GL data, so the source row is flipped here
     for (int x = 0; x < width; x++) {
         for (int y = 0; y < height; y++) {
             uint32_t colour =
                 surface
-                    ->gl_screen_pixels[x + (surface->mud->game_height - y - 1) *
-                                               surface->mud->game_width];
+                    ->gl_screen_pixels[(src_x0 + x) +
+                                       (surface->mud->game_height - y - 1) *
+                                           surface->mud->game_width];
 
             int texture_offset = ((offset_y + y) * 1024 + (offset_x + x)) * 3;
 
@@ -924,6 +1509,11 @@ void surface_gl_raster_to_sprite(Surface *surface, int sprite_id, int x,
         }
     }
 
+#if defined(__vita__)
+    // release the off-screen login-capture FBO so subsequent reads/draws target the display
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+#endif
+
     surface_gl_update_dynamic_texture(surface);
 }
 
@@ -932,12 +1522,101 @@ void surface_gl_create_framebuffer(Surface *surface) {
 
     surface->gl_screen_pixels = calloc(
         surface->mud->game_width * surface->mud->game_height, sizeof(uint32_t));
+
+#if defined(__vita__)
+    // create the off-screen render target for the login background capture: game_width x game_height RGBA8 colour
+    // texture + depth renderbuffer
+    int gw = surface->mud->game_width;
+    int gh = surface->mud->game_height;
+
+    glGenTextures(1, &surface->gl_login_color_tex);
+    glBindTexture(GL_TEXTURE_2D, surface->gl_login_color_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, gw, gh, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenRenderbuffers(1, &surface->gl_login_depth_rb);
+    glBindRenderbuffer(GL_RENDERBUFFER, surface->gl_login_depth_rb);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, gw, gh);
+
+    glGenFramebuffers(1, &surface->gl_login_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, surface->gl_login_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           surface->gl_login_color_tex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, surface->gl_login_depth_rb);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        mud_error("[gl] login capture FBO incomplete!\n");
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    surface->gl_capture_active = 0;
+#endif
 }
+
+#if defined(__vita__)
+// bind the off-screen login-capture FBO as the active draw+read target; sets gl_capture_active for 1:1 scissor coords
+void surface_gl_capture_begin(Surface *surface) {
+    surface->gl_capture_active = 1;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, surface->gl_login_fbo);
+
+    glViewport(0, 0, surface->mud->game_width, surface->mud->game_height);
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+// end the login-capture FBO scene and make its colour texture safe to read; FBO stays bound for read
+void surface_gl_capture_end(Surface *surface) {
+    // keep the FBO bound for READ, switch WRITE back to the display
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+    // a draw op on the default write target forces the FBO scene to end
+    glDisable(GL_SCISSOR_TEST);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    // block until the GPU has finished writing the FBO colour texture
+    glFinish();
+
+    // restore the full 960x544 panel viewport (capture_begin set it to the FBO size)
+    glViewport(0, 0, 960, 544);
+
+    surface->gl_capture_active = 0;
+}
+#endif
 
 void surface_gl_update_dynamic_texture(Surface *surface) {
     glBindTexture(GL_TEXTURE_2D, surface->gl_dynamic_texture);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1024, 1024, 0, GL_RGB,
-                 GL_UNSIGNED_BYTE, surface->gl_dynamic_texture_buffer);
+    // storage was allocated at creation; update texels in place
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 1024, GL_RGB,
+                    GL_UNSIGNED_BYTE, surface->gl_dynamic_texture_buffer);
+}
+
+// upload only rows [y, y+height) of the 1024x1024 dynamic texture
+void surface_gl_update_dynamic_texture_rows(Surface *surface, int y,
+                                            int height) {
+    if (y < 0) {
+        y = 0;
+    }
+    if (y + height > 1024) {
+        height = 1024 - y;
+    }
+    if (height <= 0) {
+        return;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, surface->gl_dynamic_texture);
+
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, 1024, height, GL_RGB,
+                    GL_UNSIGNED_BYTE,
+                    surface->gl_dynamic_texture_buffer + (size_t)y * 1024 * 3);
 }
 #endif

@@ -2,6 +2,7 @@
 #define _H_GAME_MODEL
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,14 +13,21 @@
 #include "gl/vertex-buffer.h"
 
 typedef struct gl_model_vertex {
-    float x, y, z;
-    float normal_x, normal_y, normal_z, normal_magnitude;
-    float face_intensity, vertex_intensity;
-    float front_r, front_g, front_b;
-    float front_texture_u, front_texture_v;
-    float back_r, back_g, back_b;
-    float back_texture_u, back_texture_v;
-} gl_model_vertex;
+    // position keeps full float range (world coords); everything else packed to 16-bit, the GPU widens SHORT -> float
+    // (and normalized SHORT -> [-1,1]) at fetch. layout puts every field on its natural boundary, shrinking the vertex 60 -> 40 bytes
+    float x, y, z; // offset  0, 12B
+    // normal xyz + magnitude, stored raw as SHORT (sources are int16, no normalize)
+    int16_t normal[4]; // offset 12,  8B  was float normal_x,y,z,mag
+    // { face_intensity, vertex_intensity+ambience }: SHORT, not normalized; USE_GOURAUD sentinel 32767 = INT16_MAX
+    int16_t lighting[2]; // offset 20,  4B  was float face/vertex intensity
+    // RSC colours are 5-bit (multiples of 8), each fits a normalized byte. GL_UNSIGNED_BYTE + normalized -> shader
+    // float3 colours. [4] keeps 4-byte alignment, index 3 is opaque padding
+    unsigned char front_colour[4]; // offset 24,  4B
+    // texcoords quantized to S16-normalized (round(clamp(uv,-1,1)*32767)); the GPU expands back to [-1,1] float
+    int16_t front_tex[2]; // offset 28,  4B  was float front_texture_u,v
+    unsigned char back_colour[4]; // offset 32,  4B
+    int16_t back_tex[2]; // offset 36,  4B  was float back_texture_u,v
+} gl_model_vertex; // total   40B
 
 extern float gl_tri_face_us[];
 extern float gl_tri_face_vs[];
@@ -34,17 +42,19 @@ typedef struct gl_face_fill {
 #endif
 
 #ifdef RENDER_GL
-#ifdef GLAD
+#if defined(__vita__)
+#include <vitaGL.h>
+#elif defined(GLAD)
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
 #include <GL/glu.h>
 #endif
-#if !defined(SDL12) && !defined(__SWITCH__)
+#if !defined(SDL12) && !defined(__SWITCH__) && !defined(__vita__)
 #include <SDL_opengl.h>
 #endif
 
-#ifdef EMSCRIPTEN
+#if defined(EMSCRIPTEN) || defined(__vita__)
 typedef struct gl_pick_vertex {
     float x, y, z;
     float r, g;
@@ -156,16 +166,48 @@ struct GameModel {
     int gl_ebo_offset;
     int gl_ebo_length;
 
+    // every face has a transparent front (all_back_only, e.g. terrain) or transparent back (all_front_only, e.g.
+    // decorations); such a model is one-sided and needs only one cull pass
+    int gl_all_front_only;
+    int gl_all_back_only;
+
+    // no face has a textured fill (all colour fills / transparent), so it uses the no-discard early-Z shader
+    int gl_all_flat;
+
+    // no drawn face samples an alpha-transparent texture on either side (flat colours + opaque textures only), so
+    // route to the no-discard shader
+    int gl_noclip_safe;
+
+    // the model's EBO range is partitioned so the opaque/no-clip faces' indices come first; this is the count of
+    // those leading indices. the opaque range draws with the no-discard shader, the rest with the clip shader. transparent models force this to 0
+    int gl_noclip_ebo_length;
+
+    // two-segment family layout: each shared buffer's EBO holds all models' noclip-safe indices first (segment A),
+    // then all models' clip indices (segment B). gl_ebo_offset/gl_noclip_ebo_length address this model's slice of segment A, these two address its slice of segment B. gl_ebo_length is the model's total index count
+    int gl_clip_ebo_offset;
+    int gl_clip_ebo_length;
+
     int gl_invisible;
 
     mat4 transform;
 
     gl_vertex_buffer *gl_buffer;
 #endif
-#if defined(RENDER_GL) && defined(EMSCRIPTEN)
+#if defined(RENDER_GL) && (defined(EMSCRIPTEN) || defined(__vita__))
     int gl_pick_vbo_offset;
     int gl_pick_ebo_offset;
 #endif
+
+    // open-addressed (x,y,z) -> vertex index table, game_model_vertex_at is O(1) not a linear scan. built lazily on
+    // first vertex_at, kept in sync by create_vertex, dropped whenever vertex coordinates can change. empty slots are -1
+    int32_t *vertex_hash;
+    int32_t vertex_hash_mask;
+
+    // optional slab for face index arrays (world split pieces). when faces_pooled is set, face_vertices[] entries
+    // point into the slab and are freed with it, never individually
+    uint16_t *face_pool;
+    int32_t face_pool_used;
+    int8_t faces_pooled;
 };
 
 void game_model_new(GameModel *game_model);
@@ -228,6 +270,9 @@ void game_model_light(GameModel *game_model);
 void game_model_relight(GameModel *game_model);
 void game_model_reset_transform(GameModel *game_model);
 void game_model_apply(GameModel *game_model);
+#if defined(RENDER_GL) || defined(RENDER_3DS_GL)
+void game_model_gl_bake_transform(GameModel *game_model, mat4 out);
+#endif
 void game_model_project_view(GameModel *game_model, int camera_x, int camera_y,
                              int camera_z, int camera_pitch, int camera_roll,
                              int camera_yaw, int view_distance, int clip_near);
@@ -250,6 +295,7 @@ void game_model_gl_unwrap_uvs(GameModel *game_model, uint16_t *face_vertices,
                               int face_vertex_count, float *us, float *vs);
 void gl_offset_texture_uvs_atlas(gl_atlas_position texture_position,
                                  float *texture_x, float *texture_y);
+int game_model_gl_classify(GameModel *game_model, int *face_noclip);
 void game_model_gl_buffer_arrays(GameModel *game_model, int *vertex_offset,
                                  int *ebo_offset);
 void game_model_get_vertex_ebo_lengths(GameModel **game_models, int length,
@@ -257,15 +303,30 @@ void game_model_get_vertex_ebo_lengths(GameModel **game_models, int length,
 float game_model_gl_intersects(GameModel *game_model, vec3 ray_start,
                                vec3 ray_end);
 void game_model_gl_create_buffer(gl_vertex_buffer *vertex_buffer,
-                                 int vbo_length, int ebo_length);
+                                 int vbo_length, int ebo_length,
+                                 int deferred);
 /*void game_model_gl_buffer_models(gl_vertex_buffer *vertex_buffer,
                                  GameModel **game_models, int length);*/
+#ifdef RENDER_GL
+// render-thread half of a deferred (worker-built) buffer: creates the GL
+// objects, uploads everything the worker staged, and adds the attributes
+void game_model_gl_realize_buffer(gl_vertex_buffer *vertex_buffer,
+                                  int keep_mirror);
+// incremental variant: begin (objects + attributes) then step the upload in
+// chunks over frames; step returns 1 when the buffer is fully uploaded
+void game_model_gl_realize_buffer_begin(gl_vertex_buffer *vertex_buffer);
+int game_model_gl_realize_buffer_step(gl_vertex_buffer *vertex_buffer,
+                                      int max_bytes, int keep_mirror);
+#endif
+
+// keep_mirror keeps the buffers' CPU staging mirrors alive after the flush
 int game_model_gl_buffer_models(gl_vertex_buffer ***vertex_buffers,
                                 int *vertex_buffers_length,
                                 GameModel **game_models,
-                                int game_models_length);
+                                int game_models_length, int keep_mirror,
+                                int deferred);
 #endif
-#if defined(RENDER_GL) && defined(EMSCRIPTEN)
+#if defined(RENDER_GL) && (defined(EMSCRIPTEN) || defined(__vita__))
 void game_model_gl_create_pick_buffer(gl_vertex_buffer *pick_buffer,
                                       int vbo_length, int ebo_length);
 void game_model_gl_buffer_pick_arrays(GameModel *game_model, int *vertex_offset,

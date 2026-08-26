@@ -1,9 +1,21 @@
 #include "utility.h"
 
+#if defined(__vita__) || defined(__linux__) || defined(__APPLE__)
+#include <time.h>
+#endif
+
 #if defined(__unix__) || defined(__unix) ||                                    \
     (defined(__APPLE__) && defined(__MACH__))
 #include <sys/stat.h>
 #define OPTIONS_UNIX
+#endif
+
+#ifdef __vita__
+#include <sys/stat.h>
+#include <limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 1024
+#endif
 #endif
 
 int sin_cos_512[512] = {0};
@@ -45,6 +57,10 @@ void get_config_path(const char *file, char *path) {
     char *pref_path = SDL_GetPrefPath("scape2003", "mudclient");
     snprintf(path, PATH_MAX, "%s%s", pref_path, file);
     SDL_free(pref_path);
+#elif defined(__vita__)
+    // writable data path; app0: is read-only so config and saves live here
+    (void)mkdir("ux0:data/RuneScape", 0777);
+    snprintf(path, PATH_MAX, "ux0:data/RuneScape/%s", file);
 #elif defined(EMSCRIPTEN)
     snprintf(path, PATH_MAX, "/" CLIENT_CONFIG_NAME  "options/%s", file);
 #elif defined(OPTIONS_UNIX)
@@ -143,6 +159,7 @@ void mud_log(char *format, ...) {
     va_end(args);
 }
 
+// errors route through SDL ERROR priority into the single on-device error.log
 void mud_error(char *format, ...) {
     va_list args = {0};
     va_start(args, format);
@@ -156,6 +173,7 @@ void mud_error(char *format, ...) {
 
     va_end(args);
 }
+
 
 char *strcat_realloc(char *s, const char *new) {
     size_t ol = strlen(s);
@@ -372,16 +390,20 @@ void format_auth_string(char *raw, int max_length, char *formatted) {
     int raw_length = (int)strlen(raw);
 
     for (int i = 0; i < max_length; i++) {
-        char char_code = raw[i];
-
         if (i >= raw_length) {
+            // read raw[i] only when in bounds; raw can be shorter than max_length and reading past its NUL is
+            // undefined
             formatted[i] = ' ';
-        } else if ((char_code >= 'a' && char_code <= 'z') ||
-                   (char_code >= 'A' && char_code <= 'Z') ||
-                   (char_code >= '0' && char_code <= '9')) {
-            formatted[i] = char_code;
         } else {
-            formatted[i] = '_';
+            char char_code = raw[i];
+
+            if ((char_code >= 'a' && char_code <= 'z') ||
+                (char_code >= 'A' && char_code <= 'Z') ||
+                (char_code >= '0' && char_code <= '9')) {
+                formatted[i] = char_code;
+            } else {
+                formatted[i] = '_';
+            }
         }
     }
 
@@ -640,6 +662,17 @@ void format_confirm_amount(int amount, char *formatted) {
     }
 }
 
+// monotonic ms with sub ms precision for phase timing
+double mud_mono_ms(void) {
+#if defined(__vita__) || defined(__linux__) || defined(__APPLE__)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+#else
+    return (double)get_ticks();
+#endif
+}
+
 int get_ticks(void) {
 #if !defined(WII) && !defined(_3DS)
     return SDL_GetTicks();
@@ -878,6 +911,34 @@ int colour_str_to_colour(const char *colour_str, int ran_target_fps) {
     } else if (strcmp(colour_str, "gr3") == 0) {
         colour = STRING_GR3;
     }
+    // OpenRSC additions, see colours.h; kept in upstream table order
+    else if (strcmp(colour_str, "bl1") == 0) {
+        colour = STRING_BL1;
+    } else if (strcmp(colour_str, "bl2") == 0) {
+        colour = STRING_BL2;
+    } else if (strcmp(colour_str, "bl3") == 0) {
+        colour = STRING_BL3;
+    } else if (strcmp(colour_str, "dgr") == 0) {
+        colour = STRING_DGR;
+    } else if (strcmp(colour_str, "dbl") == 0) {
+        colour = STRING_DBL;
+    } else if (strcmp(colour_str, "dcy") == 0) {
+        colour = STRING_DCY;
+    } else if (strcmp(colour_str, "dor") == 0) {
+        colour = STRING_DOR;
+    } else if (strcmp(colour_str, "sub") == 0) {
+        colour = STRING_SUB;
+    } else if (strcmp(colour_str, "eve") == 0) {
+        colour = STRING_EVE;
+    } else if (strcmp(colour_str, "sil") == 0) {
+        colour = STRING_SIL;
+    } else if (strcmp(colour_str, "pre") == 0) {
+        colour = STRING_PRE;
+    } else if (strcmp(colour_str, "cla") == 0) {
+        colour = STRING_CLA;
+    } else if (strcmp(colour_str, "pin") == 0) {
+        colour = STRING_PIN;
+    }
 
     return colour;
 }
@@ -915,6 +976,92 @@ void gl_create_texture(GLuint *texture_id) {
 
     // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 }
+
+#ifdef __vita__
+#include <png.h>
+
+// libpng PNG decoder returning ABGR8888; bytes land R,G,B,A in memory so GL_RGBA uploads and SDL_GetRGB work
+// unchanged
+SDL_Surface *vita_img_load_png(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        return NULL;
+    }
+
+    png_structp png =
+        png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png_infop info = png ? png_create_info_struct(png) : NULL;
+
+    if (!png || !info) {
+        if (png) {
+            png_destroy_read_struct(&png, info ? &info : NULL, NULL);
+        }
+        fclose(fp);
+        return NULL;
+    }
+
+    if (setjmp(png_jmpbuf(png))) {
+        png_destroy_read_struct(&png, &info, NULL);
+        fclose(fp);
+        return NULL;
+    }
+
+    png_init_io(png, fp);
+    png_read_info(png, info);
+
+    int width = png_get_image_width(png, info);
+    int height = png_get_image_height(png, info);
+    png_byte colour_type = png_get_color_type(png, info);
+    png_byte bit_depth = png_get_bit_depth(png, info);
+
+    // normalise every input variant to 8-bit RGBA
+    if (bit_depth == 16) {
+        png_set_strip_16(png);
+    }
+    if (colour_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_palette_to_rgb(png);
+    }
+    if (colour_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+        png_set_expand_gray_1_2_4_to_8(png);
+    }
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) {
+        png_set_tRNS_to_alpha(png);
+    }
+    if (colour_type == PNG_COLOR_TYPE_RGB ||
+        colour_type == PNG_COLOR_TYPE_GRAY ||
+        colour_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_filler(png, 0xff, PNG_FILLER_AFTER);
+    }
+    if (colour_type == PNG_COLOR_TYPE_GRAY ||
+        colour_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png);
+    }
+
+    png_read_update_info(png, info);
+
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(
+        0, width, height, 32, SDL_PIXELFORMAT_ABGR8888);
+
+    if (!surface) {
+        png_destroy_read_struct(&png, &info, NULL);
+        fclose(fp);
+        return NULL;
+    }
+
+    png_bytep *rows = malloc((size_t)height * sizeof(png_bytep));
+    for (int y = 0; y < height; y++) {
+        rows[y] = (png_bytep)surface->pixels + (size_t)y * surface->pitch;
+    }
+
+    png_read_image(png, rows);
+
+    free(rows);
+    png_destroy_read_struct(&png, &info, NULL);
+    fclose(fp);
+
+    return surface;
+}
+#endif
 
 void gl_load_texture(GLuint *texture_id, char *file) {
     gl_create_texture(texture_id);

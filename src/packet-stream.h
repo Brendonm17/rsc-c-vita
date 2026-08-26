@@ -19,7 +19,9 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <sys/ioctl.h>
+#ifndef __vita__
+#include <sys/ioctl.h> // VitaSDK newlib lacks it; FIONBIO only
+#endif
 #include <sys/socket.h>
 #include <sys/types.h>
 #endif
@@ -44,7 +46,9 @@
 #define USERNAME_LENGTH 20
 #define PASSWORD_LENGTH 20
 
-#define PACKET_BUFFER_LENGTH 5000
+// sized to the reference client's 30000 buffer; a full custom bank is ~9.6KB and resends whole after every update.
+// 5000 overflowed
+#define PACKET_BUFFER_LENGTH 30000
 
 /*extern char *SPOOKY_THREAT;
 extern int THREAT_LENGTH;
@@ -78,6 +82,28 @@ struct PacketStream {
     int8_t available_buffer[PACKET_BUFFER_LENGTH];
     int available_length;
     int available_offset;
+
+#ifdef __vita__
+    // send queue for bytes the socket refuses (Wi-Fi power-save); pumped each packet tick instead of sleeping in send
+    uint8_t send_queue[16384];
+    int send_queue_length;
+    uint64_t send_stall_start;
+
+    // 1 = catch-up tick, no recv syscalls; only already-buffered packets parse
+    int recv_skip;
+#endif
+
+#ifdef WITH_SINGLEPLAYER
+    int singleplayer; // plaintext-204 wire, SP and co-op guests
+    int spnet_conn; // -1 unless a co-op guest conn handle
+#endif
+
+    // translate opcodes to/from the revision-177 dialect (see protocol177.h)
+    int protocol177;
+
+    // custom framing: 2-byte big-endian length, plaintext opcodes, no ISAAC; client->server len = 1+payload,
+    // server->client 3+payload
+    int protocol_custom;
 
 #ifndef NO_RSA
     struct rsa rsa;
@@ -113,6 +139,9 @@ void packet_stream_new_packet(PacketStream *packet_stream, ClientOpcode opcode);
 /*int packet_stream_decode_opcode(PacketStream *packet_stream, int opcode);*/
 int packet_stream_write_packet(PacketStream *packet_stream, int i);
 void packet_stream_send_packet(PacketStream *packet_stream);
+#ifdef __vita__
+void packet_stream_send_pump(PacketStream *packet_stream);
+#endif
 void packet_stream_put_bytes(PacketStream *packet_stream, void *src, int offset,
                              int length);
 void packet_stream_put_byte(PacketStream *packet_stream, int i);
@@ -120,10 +149,11 @@ void packet_stream_put_short(PacketStream *packet_stream, int i);
 void packet_stream_put_int(PacketStream *packet_stream, int i);
 void packet_stream_put_long(PacketStream *packet_stream, int64_t i);
 void packet_stream_put_string(PacketStream *packet_stream, char *s);
-#ifdef REVISION_177
+void packet_stream_put_string_newline(PacketStream *packet_stream, char *s);
+// always compiled: the runtime 177 path needs put_password in the 204 build
 void packet_stream_put_password(PacketStream *packet_stream, int session_id,
                                 char *password);
-#else
+#ifndef REVISION_177
 void packet_stream_put_login_block(PacketStream *packet_stream,
                                    const char *username, const char *password,
                                    uint32_t *isaac_keys, uint32_t uuid);

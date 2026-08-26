@@ -5,6 +5,17 @@ static bool sound_visible(mudclient *mud) {
     return mud->options->members && !mud->options->lowmem;
 }
 
+// name and clan tag row shown only when clans + nametags are on
+static bool nametag_row_visible(mudclient *mud) {
+#ifdef REVISION_177
+    (void)mud;
+    return false;
+#else
+    return mud->protocol_custom && mud->orsc.want_clans &&
+           mud->orsc.floating_nametags;
+#endif
+}
+
 void mudclient_send_privacy_settings(mudclient *mud, int chat, int private_chat,
                                      int trade, int duel) {
     packet_stream_new_packet(mud->packet_stream, CLIENT_SETTINGS_PRIVACY);
@@ -194,8 +205,17 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
         height += OPTIONS_LINE_BREAK;
     }
 
+    if (nametag_row_visible(mud)) {
+        height += OPTIONS_LINE_BREAK;
+    }
+
     if (is_touch) {
         height = 198;
+
+        // re-adds the row so touch's fixed-height panel grows to fit
+        if (nametag_row_visible(mud)) {
+            height += OPTIONS_LINE_BREAK;
+        }
         ui_x = UI_TABS_TOUCH_X - OPTIONS_WIDTH - 1;
         ui_y = (UI_TABS_TOUCH_Y + UI_TABS_TOUCH_HEIGHT) - height - 2;
     }
@@ -224,6 +244,10 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
     }
 
     if (mud->options->show_additional_options && sound_visible(mud)) {
+        controls_box_height += OPTIONS_LINE_BREAK;
+    }
+
+    if (nametag_row_visible(mud)) {
         controls_box_height += OPTIONS_LINE_BREAK;
     }
 
@@ -305,6 +329,19 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
 
         y += OPTIONS_LINE_BREAK;
     }
+
+#ifndef REVISION_177
+    // row text: "Name and Clan Tag - On/Off"
+    if (nametag_row_visible(mud)) {
+        sprintf(settings_string, "Name and Clan Tag - %s",
+                (mud->orsc_name_clan_tag_overlay ? "@gre@On" : "@red@Off"));
+
+        surface_draw_string(mud->surface, settings_string, x, y, FONT_BOLD_12,
+                            WHITE);
+
+        y += OPTIONS_LINE_BREAK;
+    }
+#endif
 
     if (mud->options->show_additional_options) {
         int text_colour = WHITE;
@@ -556,6 +593,31 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
             y += OPTIONS_LINE_BREAK;
         }
 
+#ifndef REVISION_177
+        // mirrors the draw pass; both walk the same y cursor
+        if (nametag_row_visible(mud)) {
+            if (mud->mouse_x > x && mud->mouse_x < x + OPTIONS_WIDTH &&
+                mud->mouse_y > y - 12 && mud->mouse_y < y + 4 &&
+                mud->mouse_button_click == 1) {
+                mud->orsc_name_clan_tag_overlay =
+                    !mud->orsc_name_clan_tag_overlay;
+
+                // sends the floating-nametags setting toggle
+                packet_stream_new_packet(mud->packet_stream,
+                                         CLIENT_SETTINGS_GAME);
+
+                packet_stream_put_byte(mud->packet_stream, 35);
+
+                packet_stream_put_byte(
+                    mud->packet_stream, mud->orsc_name_clan_tag_overlay ? 1 : 0);
+
+                packet_stream_send_packet(mud->packet_stream);
+            }
+
+            y += OPTIONS_LINE_BREAK;
+        }
+#endif
+
         if (mud->options->show_additional_options) {
             if (mud->mouse_x > x && mud->mouse_x < x + OPTIONS_WIDTH &&
                 mud->mouse_y > y - 12 && mud->mouse_y < y + 4 &&
@@ -570,7 +632,10 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
 
         if (!is_compact) {
             y += OPTIONS_LINE_BREAK + 5;
-        } else if (is_touch) {
+        } else if (is_touch && mud->options->account_management) {
+            // this spacer is the touch Security header, only drawn under
+            // account management; unconditional it shifted every click
+            // window below the privacy section one row down
             y += OPTIONS_LINE_BREAK - 4;
         }
 
