@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(RENDER_GL) || defined(RENDER_3DS_GL)
+// index-aligned OpenRSC extended appearance-animation table (indices 229..558), from OpenRSC's loadAnimationDefinitions
+#include "gl/textures/openrsc-ext-anims.h"
+#endif
+
 #define CUSTOM_ITEM_BASE 1290
 #define CUSTOM_ITEM_COUNT 302
 
@@ -938,25 +943,18 @@ static void game_data_append_custom_entity_animations(void) {
         return; // already appended
     }
 
-    // skip only when a config already defines every custom name. the
-    // authentic table's last entry is also named "scythe", so an any-name
-    // check aborted the whole append and hid every custom layer
-    int present = 0;
-    for (int k = 0; k < GL_CUSTOM_ENTITY_ANIM_COUNT; k++) {
-        for (int i = 0; i < game_data.animation_count; i++) {
-            const char *n = game_data.animations[i].name;
-            if (n != NULL && strcmp(n, gl_custom_entity_anims[k].name) == 0) {
-                present++;
-                break;
-            }
-        }
-    }
-    if (present == GL_CUSTOM_ENTITY_ANIM_COUNT) {
-        return; // the config ships them all, do not duplicate
+    int base = game_data.animation_count;
+
+    // extended table is index-aligned to OpenRSC's appearanceId-1, so it sits on
+    // top of the 229-entry authentic base; skip the append unless the loaded config
+    // is that length, else custom (10010) worn appearance ids misalign
+    if (base != OPENRSC_EXT_ANIM_BASE_INDEX) {
+        mud_error("[gfx] ext-anim append SKIPPED: base=%d (expected %d)\n", base,
+                  OPENRSC_EXT_ANIM_BASE_INDEX);
+        return;
     }
 
-    int base = game_data.animation_count;
-    int total = base + GL_CUSTOM_ENTITY_ANIM_COUNT;
+    int total = base + OPENRSC_EXT_ANIM_COUNT;
 
     struct AnimConfig *anims =
         realloc(game_data.animations, total * sizeof(struct AnimConfig));
@@ -965,22 +963,34 @@ static void game_data_append_custom_entity_animations(void) {
     }
     game_data.animations = anims;
 
-    for (int k = 0; k < GL_CUSTOM_ENTITY_ANIM_COUNT; k++) {
+    for (int k = 0; k < OPENRSC_EXT_ANIM_COUNT; k++) {
+        const openrsc_ext_anim *e = &openrsc_ext_anims[k];
         struct AnimConfig *ac = &anims[base + k];
         memset(ac, 0, sizeof(struct AnimConfig));
-        ac->name = strdup(gl_custom_entity_anims[k].name);
-        ac->colour = gl_custom_entity_anims[k].colour;
-        ac->gender = 0; // never enters the appearance-design head/body cycle
-        ac->has_a = 1; // 15 walk + 3 combat (EQUIP_COMBAT layout)
+        ac->name = strdup(e->name);
+        ac->colour = e->colour1; // colour2 (blueMask) is a later 2-colour pass
+        ac->gender = 0;
+        ac->has_a = e->has_a;
         ac->has_f = 0;
-        ac->file_id = gl_custom_entity_anims[k].file_id;
+
+        // file_id: names matching a custom-entity atlas sprite take that sprite's
+        // high file_id (drawn from custom_entities.png); names matching an authentic
+        // base sprite get 0, so load_entities' name-dedup gives them the base file_id
+        int fid = 0;
+        for (int j = 0; j < GL_CUSTOM_ENTITY_ANIM_COUNT; j++) {
+            if (strcmp(gl_custom_entity_anims[j].name, e->name) == 0) {
+                fid = gl_custom_entity_anims[j].file_id;
+                break;
+            }
+        }
+        ac->file_id = fid;
     }
 
     game_data.animation_count = total;
     custom_entity_anim_base = base;
 
-    // log confirmation next to the sheet-load line
-    mud_error("[gfx] custom entity anims appended at %d\n", base);
+    mud_error("[gfx] openrsc ext anims appended at %d (count %d)\n", base,
+              OPENRSC_EXT_ANIM_COUNT);
 }
 
 // resolve a custom-entity animation NAME to its animations[] index, or -1
@@ -988,9 +998,14 @@ static int custom_entity_anim_index(const char *name) {
     if (custom_entity_anim_base < 0) {
         return -1;
     }
-    for (int k = 0; k < GL_CUSTOM_ENTITY_ANIM_COUNT; k++) {
-        if (strcmp(gl_custom_entity_anims[k].name, name) == 0) {
-            return custom_entity_anim_base + k;
+    // index-aligned now, so a layer's animation name can resolve in the authentic
+    // base or the extended range -- search the whole table, first match wins
+    // (metal/colour variants resolve to their first; a layered NPC override needing
+    // a specific variant is refined by exact appearance index, CUSTOM_LAYERED_ANIM_OVERRIDES)
+    for (int i = 0; i < game_data.animation_count; i++) {
+        const char *n = game_data.animations[i].name;
+        if (n != NULL && strcmp(n, name) == 0) {
+            return i;
         }
     }
     return -1;

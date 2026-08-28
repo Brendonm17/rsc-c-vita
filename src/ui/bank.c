@@ -660,7 +660,7 @@ void mudclient_draw_bank(mudclient *mud) {
             if (is_touch) {
                 mudclient_trigger_keyboard(
                     mud, mud->input_pm_current, 0, keyboard_x, keyboard_y,
-                    bank_width - 49, 20, FONT_BOLD_12, 0);
+                    bank_width - 49, 20, FONT_BOLD_12, 0, /* submit_on_enter */ 0);
             }
 
             mud->bank_search_focus = 1;

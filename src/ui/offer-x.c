@@ -24,7 +24,7 @@ void mudclient_draw_offer_x(mudclient *mud) {
         mud->mouse_y >= y && mud->mouse_y <= y + 30) {
         mudclient_trigger_keyboard(mud, mud->input_digits_current, 0, dialog_x,
                                    y + 1, OFFER_X_WIDTH - 3, 30, FONT_BOLD_14,
-                                   1);
+                                   1, /* submit_on_enter */ 1);
     }
 
     y += 20;

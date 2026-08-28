@@ -134,6 +134,10 @@ void strtolower(char *s);
 
 void get_config_path(const char *file, char *path);
 
+// Server opcode being dispatched; appended to buffer over-read warnings so a
+// read can be traced to its packet. Set in packet-handler.c.
+extern int rsc_debug_last_opcode;
+
 int get_signed_byte(void *, size_t, size_t);
 int get_unsigned_byte(void *, size_t, size_t);
 int get_unsigned_short(void *, size_t, size_t);

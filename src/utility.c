@@ -223,12 +223,17 @@ void strtolower(char *s) {
     }
 }
 
+// Server opcode being dispatched (set in packet-handler.c after decode),
+// appended to the over-read warnings below so a read can be traced to its packet.
+int rsc_debug_last_opcode = -1;
+
 int get_signed_byte(void *b, size_t offset, size_t buflen) {
     int8_t *buffer = b;
     if (offset > (SIZE_MAX - 1) || (buflen - offset) < 1) {
         mud_error(
-            "WARNING: tried to read excess byte from buffer, off %zu len %zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess byte from buffer, off %lu len %lu "
+            "op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -241,8 +246,9 @@ int get_unsigned_byte(void *b, size_t offset, size_t buflen) {
     int8_t *buffer = b;
     if (offset > (SIZE_MAX - 1) || (buflen - offset) < 1) {
         mud_error(
-            "WARNING: tried to read excess byte from buffer, off %zu len %zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess byte from buffer, off %lu len %lu "
+            "op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -255,9 +261,9 @@ int get_unsigned_short(void *b, size_t offset, size_t buflen) {
     int8_t *buffer = b;
     if (offset > (SIZE_MAX - 2) || (buflen - offset) < 2) {
         mud_error(
-            "WARNING: tried to read excess short from buffer, off %zu len "
-            "%zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess short from buffer, off %lu len "
+            "%lu op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -270,9 +276,9 @@ int get_unsigned_short_le(void *b, size_t offset, size_t buflen) {
     int8_t *buffer = b;
     if (offset > (SIZE_MAX - 2) || (buflen - offset) < 2) {
         mud_error(
-            "WARNING: tried to read excess short from buffer, off %zu len "
-            "%zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess short from buffer, off %lu len "
+            "%lu op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -285,8 +291,9 @@ int get_unsigned_int(void *b, size_t offset, size_t buflen) {
     int8_t *buffer = b;
     if (offset > (SIZE_MAX - 4) || (buflen - offset) < 4) {
         mud_error(
-            "WARNING: tried to read excess int from buffer, off %zu len %zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess int from buffer, off %lu len %lu "
+            "op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -321,8 +328,9 @@ int get_stack_int(void *b, size_t offset, size_t buflen) {
     uint8_t *buffer = b;
     if (offset > (SIZE_MAX - 1) || (buflen - offset) < 1) {
         mud_error(
-            "WARNING: tried to read excess byte from buffer, off %zu len %zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess byte from buffer, off %lu len %lu "
+            "op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -335,8 +343,9 @@ int get_stack_int(void *b, size_t offset, size_t buflen) {
 
     if (offset > (SIZE_MAX - 4) || (buflen - offset) < 4) {
         mud_error(
-            "WARNING: tried to read excess int from buffer, off %zu len %zu\n",
-            offset, buflen);
+            "WARNING: tried to read excess int from buffer, off %lu len %lu "
+            "op=%d\n",
+            (unsigned long)offset, (unsigned long)buflen, rsc_debug_last_opcode);
 
         assert(0);
 
@@ -356,9 +365,10 @@ int get_bit_mask(void *b, size_t offset, size_t buflen, size_t nbits) {
 
     for (; nbits > bit_offset; bit_offset = 8) {
         if (byte_offset > (SIZE_MAX - 1) || (buflen - byte_offset) < 1) {
-            mud_error("WARNING: tried to read excess byte from buffer, off %zu "
-                      "len %zu\n",
-                      offset, buflen);
+            mud_error("WARNING: tried to read excess byte from buffer, off %lu "
+                      "len %lu op=%d\n",
+                      (unsigned long)offset, (unsigned long)buflen,
+                      rsc_debug_last_opcode);
             assert(0);
             return 0;
         }

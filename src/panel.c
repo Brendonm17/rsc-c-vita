@@ -282,7 +282,7 @@ static void panel_open_keyboard(Panel *panel, int control) {
     mudclient_trigger_keyboard(
         panel->surface->mud, panel->control_text[control],
         panel->control_mask_text[control], x, y - (height / 2), width, height,
-        font, is_centred);
+        font, is_centred, /* submit_on_enter */ 0);
 }
 
 void panel_draw_text_input(Panel *panel, int control, int x, int y, int width,

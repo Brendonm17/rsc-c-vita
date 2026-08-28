@@ -2348,6 +2348,14 @@ void mudclient_login(mudclient *mud, char *username, char *password,
     if (MUD_SP_WIRE(mud)) {
         password = (char *)"rscsp";
     }
+
+    /* Online connect: free any leftover ad-hoc radio so Wi-Fi infra is back before
+     * the connectivity probe. Normally already down (leaving a world frees it);
+     * still needed if the user toggled ad-hoc browse then picked online directly.
+     * Skipped for the SP host / co-op guest (MUD_SP_WIRE), which keep their network. */
+    if (!MUD_SP_WIRE(mud)) {
+        spnet_shutdown();
+    }
 #endif
 
     if (strlen(username) == 0 || strlen(password) == 0) {
@@ -4391,6 +4399,12 @@ void mudclient_close_connection(mudclient *mud) {
 #ifdef WITH_SINGLEPLAYER
     // leaving the world for good: end the embedded server (host only, no-op for guests/online)
     singleplayer_leave_world();
+    /* Return the Vita to its normal Wi-Fi-infra state: singleplayer_leave_world()
+     * only closes the listen socket, so free the ad-hoc radio here (leaves the
+     * ad-hoc group, terminates the adhoc libs) to start re-associating now, on the
+     * menu screen, rather than at online-login when infra can't recover in time.
+     * No-op for Offline; safe for LAN (sockets only, infra never dropped). */
+    spnet_shutdown();
 #endif
 }
 
@@ -4408,6 +4422,10 @@ void mudclient_lost_connection(mudclient *mud) {
 #ifdef WITH_SINGLEPLAYER
         // back to the login screen for good: end the embedded server (host only); the reconnect branch below does not
         singleplayer_leave_world();
+        /* Same radio cleanup as mudclient_close_connection: free the ad-hoc co-op
+         * radio so the Vita returns to normal Wi-Fi infra. The involuntary-guest
+         * branch below (logout_timeout == 0) keeps ad-hoc up so the guest can rejoin. */
+        spnet_shutdown();
 #endif
     } else {
 #ifdef WITH_SINGLEPLAYER
@@ -6639,10 +6657,22 @@ void mudclient_draw_entity_sprites(mudclient *mud) {
                      dy * (PROJECTILE_RANGE_MAX - player->projectile_range)) /
                     PROJECTILE_RANGE_MAX;
 
-                scene_add_sprite(mud->scene,
-                                 mud->sprite_projectile +
-                                     player->incoming_projectile_sprite,
-                                 rx, rz, ry, 32, 32, 0);
+                /* clamp the wire projectile id to the loaded config85 range so
+                 * an out-of-range id draws a valid sprite instead of an
+                 * unloaded (blank) slot or reading past sprite_projectile. */
+                if (game_data.projectile_sprite > 0) {
+                    int proj_sprite = player->incoming_projectile_sprite;
+
+                    if (proj_sprite < 0) {
+                        proj_sprite = 0;
+                    } else if (proj_sprite >= game_data.projectile_sprite) {
+                        proj_sprite = game_data.projectile_sprite - 1;
+                    }
+
+                    scene_add_sprite(mud->scene,
+                                     mud->sprite_projectile + proj_sprite, rx, rz,
+                                     ry, 32, 32, 0);
+                }
 
                 mud->scene_sprite_count++;
             }
@@ -7291,7 +7321,7 @@ int mudclient_is_touch(mudclient *mud) {
 // TODO open_keyboard
 void mudclient_trigger_keyboard(mudclient *mud, char *text, int is_password,
                                 int x, int y, int width, int height, int font,
-                                int is_centred) {
+                                int is_centred, int submit_on_enter) {
     (void)mud;
     (void)text;
     (void)is_password;
@@ -7301,12 +7331,14 @@ void mudclient_trigger_keyboard(mudclient *mud, char *text, int is_password,
     (void)height;
     (void)font;
     (void)is_centred;
+    (void)submit_on_enter;
 #ifdef ANDROID
     SDL_StartTextInput();
 #elif defined(__vita__)
     // open the system IME, seeded with the field's current text
     vita_ime_open(is_password ? "Enter password" : "Enter text", text,
-                  is_password, text != NULL ? (int)strlen(text) : 0);
+                  is_password, text != NULL ? (int)strlen(text) : 0,
+                  submit_on_enter);
 #elif defined(EMSCRIPTEN)
     int is_scaled = mudclient_is_ui_scaled(mud);
 

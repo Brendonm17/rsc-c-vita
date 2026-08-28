@@ -183,7 +183,7 @@ void mudclient_handle_sleep_input(mudclient *mud) {
         mud->mouse_y < keyboard_y + keyboard_height) {
         mudclient_trigger_keyboard(mud, mud->input_text_current, 0, keyboard_x,
                                    keyboard_y, keyboard_width, keyboard_height,
-                                   FONT_BOLD_16, 1);
+                                   FONT_BOLD_16, 1, /* submit_on_enter */ 1);
     }
 
     /* new sleep word */

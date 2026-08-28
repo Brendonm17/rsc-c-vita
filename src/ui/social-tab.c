@@ -932,7 +932,8 @@ void mudclient_draw_social_input(mudclient *mud) {
 
                 mudclient_trigger_keyboard(mud, input_current, 0, keyboard_x,
                                            keyboard_y, box_width - 5, 30,
-                                           FONT_BOLD_14, 1);
+                                           FONT_BOLD_14, 1,
+                                           /* submit_on_enter */ 1);
             }
         }
     }

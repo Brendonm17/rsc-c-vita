@@ -46,7 +46,8 @@ void mudclient_draw_change_password(mudclient *mud) {
              mud->show_appearance_change == PASSWORD_STEP_NEW)) {
             mudclient_trigger_keyboard(
                 mud, mud->input_text_current, 1, dialog_x - 2, y + 6,
-                CHANGE_PASSWORD_WIDTH, 30, FONT_BOLD_14, 1);
+                CHANGE_PASSWORD_WIDTH, 30, FONT_BOLD_14, 1,
+                /* submit_on_enter */ 1);
         } else if (mud->mouse_x < dialog_x || mud->mouse_y < dialog_y ||
                    mud->mouse_x > CHANGE_PASSWORD_WIDTH + dialog_x ||
                    mud->mouse_y > CHANGE_PASSWORD_HEIGHT + dialog_y) {

@@ -781,6 +781,9 @@ void mudclient_packet_tick(mudclient *mud) {
         opcode = mapped;
     }
 
+    // capture the translated opcode so utility.c's over-read warnings can name the packet
+    rsc_debug_last_opcode = opcode;
+
     // custom world reuses the canonical-204 opcode numbers for shared packets plus ~27 custom-only opcodes.
     // SEND_SERVER_CONFIGS (19) is custom-only and pushed after login, so skip it here; the other custom-only opcodes fall through to the switch default
     if (mud->packet_stream->protocol_custom && opcode == 19) {
@@ -3254,7 +3257,14 @@ void mudclient_packet_tick(mudclient *mud) {
         }
 #endif
 
-        for (int i = 0; i < quests_length; i++) {
+        // packet carries only the server's quest count, but quests_length includes
+        // the 2 client-appended custom quests -- reading all of them over-read 1-2
+        // bytes past the packet; clamp to what the packet holds (extras stay default)
+        int quests_sent = size - 1;
+        if (quests_sent > quests_length) {
+            quests_sent = quests_length;
+        }
+        for (int i = 0; i < quests_sent; i++) {
             mud->quest_complete[i] = get_unsigned_byte(data, i + 1, size);
         }
         break;

@@ -66,15 +66,22 @@ static void vita_utf16_to_utf8(const uint16_t *src, uint8_t *dst) {
 // non-modal on-screen keyboard: vita_ime_open() returns immediately, vita_ime_poll() is called once per frame
 static int vita_ime_active = 0;
 static int vita_ime_initial_length = 0;
+/* When set, confirming the IME also forwards a K_ENTER to the focused field
+ * (commits input_text_current -> input_text_final), so Enter-submit screens with
+ * no on-screen submit button (the sleep word) can be completed. Off by default;
+ * set per-open via vita_ime_open's last argument. */
+static int vita_ime_submit_on_enter = 0;
 static uint16_t vita_ime_input[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1];
 
 int vita_ime_is_active(void) { return vita_ime_active; }
 
 void vita_ime_open(const char *title, const char *initial, int is_password,
-                   int initial_length) {
+                   int initial_length, int submit_on_enter) {
     if (vita_ime_active) {
         return;
     }
+
+    vita_ime_submit_on_enter = submit_on_enter;
 
     static uint16_t title_u16[SCE_IME_DIALOG_MAX_TITLE_LENGTH + 1];
     static uint16_t initial_u16[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1];
@@ -133,6 +140,10 @@ void vita_ime_poll(mudclient *mud) {
         for (int i = 0; utf8[i] != '\0'; i++) {
             mudclient_key_pressed(mud, (unsigned char)utf8[i],
                                   (unsigned char)utf8[i]);
+        }
+
+        if (vita_ime_submit_on_enter) {
+            mudclient_key_pressed(mud, K_ENTER, K_ENTER);
         }
     }
 

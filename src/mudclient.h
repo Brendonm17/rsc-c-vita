@@ -315,8 +315,9 @@
 #define SKILL_MAGIC 6
 
 /* sprite stuff */
-// sprite limit 5120: room for OpenRSC custom entity sprites (file_id 4032..5093, custom_entities.png atlas)
-#define SPRITE_LIMIT 5120
+// sprite limit 8192: room for the full OpenRSC custom entity sprite range (custom_entities.png atlas).
+// bumping this resizes the surface sprite arrays -- needs a clean rebuild (delete .glo), no header-dep tracking
+#define SPRITE_LIMIT 8192
 
 /* jagex loading screen on startup */
 #define LOADING_WIDTH 277
@@ -1654,10 +1655,10 @@ int mudclient_is_touch(mudclient *mud);
 int mudclient_is_skin_colour_unlocked(mudclient *mud, int index);
 void mudclient_trigger_keyboard(mudclient *mud, char *text, int is_password,
                                 int x, int y, int width, int height, int font,
-                                int is_centred);
+                                int is_centred, int submit_on_enter);
 #ifdef __vita__
 void vita_ime_open(const char *title, const char *initial, int is_password,
-                   int initial_length);
+                   int initial_length, int submit_on_enter);
 void vita_ime_poll(mudclient *mud);
 int vita_ime_is_active(void);
 #endif

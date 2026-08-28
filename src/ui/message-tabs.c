@@ -326,8 +326,11 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
         (is_touch && !bottom_ui) ? HBAR_WIDTH : mud->surface->width;
 
     if (bottom_ui && mud->last_mouse_button_down == 1 &&
+        mud->mouse_x >= MESSAGE_TABS_TOUCH_X &&
         mud->mouse_y > bar_min_y && mud->mouse_y <= bar_max_y) {
-        // bottom strip: same geometry as the draw
+        // bottom strip: same geometry as the draw. Guard x >= MESSAGE_TABS_TOUCH_X so
+        // a tap on the keyboard button (bottom-left, left of the tabs) falls through to
+        // the keyboard-button hit-test below instead of being swallowed here
         int button_width =
             (mud->surface->width - MESSAGE_TABS_TOUCH_X - 10) / 4;
         int index = (mud->mouse_x - MESSAGE_TABS_TOUCH_X) / button_width;
@@ -358,7 +361,8 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
 
         mud->last_mouse_button_down = 0;
         mud->mouse_button_down = 0;
-    } else if (mud->last_mouse_button_down == 1 && mud->mouse_x <= bar_max_x &&
+    } else if (!bottom_ui && mud->last_mouse_button_down == 1 &&
+               mud->mouse_x <= bar_max_x &&
                mud->mouse_y > bar_min_y && mud->mouse_y <= bar_max_y) {
         int all_min_x = (is_compact ? 12 * button_scale : 15);
         int all_max_x = (is_compact ? 75 * button_scale : 96);
@@ -468,7 +472,8 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
             (is_within_chat_input || is_within_button_input)) {
             mudclient_trigger_keyboard(mud, chat_input, 0, chat_input_x,
                                        chat_input_y, chat_input_width,
-                                       chat_input_height, FONT_BOLD_12, 0);
+                                       chat_input_height, FONT_BOLD_12, 0,
+                                       /* submit_on_enter */ 1);
 
             mud->last_mouse_button_down = 0;
         }

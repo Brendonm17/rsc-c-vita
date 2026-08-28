@@ -36,7 +36,10 @@ static int winsock_init = 0;
 
 // sockets ride sceNet, initialised once with its own pool; DNS uses sceNetResolver, not getaddrinfo
 #define VITA_NET_POOL_SIZE (1 * 1024 * 1024)
-#define VITA_NET_CONNECT_WAIT_MS 3000
+// max wait for Wi-Fi infra to report "connected"; only paid when not already
+// connected. Sized for re-associating with the AP after an ad-hoc co-op session
+// (which drops infra, see vita_net_connected) -- a fresh association can take 10-15s
+#define VITA_NET_CONNECT_WAIT_MS 20000
 static int vita_net_ready = 0;
 static char vita_net_pool[VITA_NET_POOL_SIZE] __attribute__((aligned(16)));
 
@@ -67,9 +70,11 @@ static int vita_net_init(void) {
     }
 
     ret = sceNetCtlInit();
-    if (ret < 0) {
-        // Needed only for the connectivity probe below; if it failed the probe
-        // reports "offline" and the user gets the same clear error.
+    if (ret < 0 && (unsigned)ret != 0x80412102u) {
+        // 0x80412102 = SCE_NET_CTL_ERROR_NOT_TERMINATED: netctl already up (the SP
+        // co-op transport brought it up and never tears it down) -- reuse it, like
+        // the sceNetInit EBUSY case above. Any other failure only matters for the
+        // connectivity probe below, which then reports "offline".
         mud_error("vita: sceNetCtlInit: 0x%08x\n", (unsigned)ret);
     }
 
@@ -77,22 +82,46 @@ static int vita_net_init(void) {
     return 0;
 }
 
-// 1 when Wi-Fi is associated with an IP; briefly waits out a connection still coming up after resume
+// 1 when Wi-Fi is associated with an IP. If infra is idle-disconnected (e.g. after
+// an ad-hoc co-op session), re-inits netctl to re-associate, then waits it out
 static int vita_net_connected(void) {
+    int state = 0;
+    int ret = sceNetCtlInetGetState(&state);
+    if (ret < 0) {
+        mud_error("[net] sceNetCtlInetGetState failed: 0x%08x\n", (unsigned)ret);
+        return 0;
+    }
+    if (state == SCE_NETCTL_STATE_CONNECTED) {
+        return 1;
+    }
+
+    // idle-disconnected: re-init netctl to re-drive the AP association. Only when
+    // fully idle (state 0); re-initing mid-association (1/2) would abort the connect
+    if (state == 0) {
+        mud_error("[net] infra idle (state=0) before online connect; "
+                  "re-initialising netctl to re-associate with Wi-Fi\n");
+        sceNetCtlTerm(); // returns void
+        int i = sceNetCtlInit();
+        mud_error("[net] netctl reinit: Init=0x%08x\n", (unsigned)i);
+    }
+
     int last_state = -1;
     for (int waited_ms = 0; waited_ms <= VITA_NET_CONNECT_WAIT_MS;
          waited_ms += 100) {
-        int state = 0;
-        int ret = sceNetCtlInetGetState(&state);
-
+        int st = 0;
+        ret = sceNetCtlInetGetState(&st);
         if (ret < 0) {
             mud_error("[net] sceNetCtlInetGetState failed: 0x%08x\n",
                       (unsigned)ret);
             return 0;
         }
-        last_state = state;
 
-        if (state == SCE_NETCTL_STATE_CONNECTED) {
+        if (st != last_state) { // log each state transition
+            mud_error("[net] infra wait: t=%dms state=%d\n", waited_ms, st);
+            last_state = st;
+        }
+
+        if (st == SCE_NETCTL_STATE_CONNECTED) {
             return 1;
         }
 

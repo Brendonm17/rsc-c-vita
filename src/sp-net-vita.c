@@ -1168,9 +1168,23 @@ void spnet_shutdown(void) {
     // full ad-hoc teardown; the shared LAN sceNet stack is never terminated
     if (was_adhoc) {
         // leave the system ad-hoc network the CONN dialog joined
-        sceNetCtlAdhocDisconnect();
-        if (g_adhoc_ctl_up) { sceNetAdhocctlTerm(); g_adhoc_ctl_up = 0; }
-        if (g_adhoc_up) { sceNetAdhocTerm(); g_adhoc_up = 0; }
+        int adc = sceNetCtlAdhocDisconnect();
+        int actlt = 0, adt = 0;
+        if (g_adhoc_ctl_up) { actlt = sceNetAdhocctlTerm(); g_adhoc_ctl_up = 0; }
+        if (g_adhoc_up) { adt = sceNetAdhocTerm(); g_adhoc_up = 0; }
+        fprintf(stderr, "[spnet] leave ad-hoc: AdhocDisconnect=0x%08x "
+                        "adhocctlTerm=0x%08x adhocTerm=0x%08x\n",
+                (unsigned)adc, (unsigned)actlt, (unsigned)adt);
+
+        /* Radio is free now, but netctl's infra side stays at state=0 -- sceNetCtl
+         * has no reconnect call and sceNetCtlInit (which kicks the AP association)
+         * only ran at boot. Re-init netctl here on leaving ad-hoc to start
+         * re-associating while the player is in menus; vita_net_connected() on the
+         * online path re-checks and waits out the rest. */
+        sceNetCtlTerm(); // returns void
+        int nci = sceNetCtlInit();
+        fprintf(stderr, "[spnet] post-adhoc netctl reinit: Init=0x%08x "
+                        "(re-associating Wi-Fi infra)\n", (unsigned)nci);
     }
 
     g_scan_active = 0;
