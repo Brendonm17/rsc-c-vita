@@ -39,8 +39,7 @@ static int vita_deadzone(mudclient *mud) {
     return mud->options->vita_stick_deadzone * 327;
 }
 
-// d-pad held direction (-1/0/+1 per axis) nudges the cursor each frame, at half the stick's speed
-#define VITA_DPAD_SPEED_RATIO 0.5f
+// d-pad held direction (-1/0/+1 per axis) nudges the cursor each frame at options->vita_dpad_speed
 static int vita_dpad_x = 0;
 static int vita_dpad_y = 0;
 
@@ -129,8 +128,8 @@ static void vita_move_cursor(mudclient *mud) {
     vita_cursor_x += nx * fabsf(nx) * speed;
     vita_cursor_y += ny * fabsf(ny) * speed;
 
-    // d-pad nudges the cursor at a steady half-stick speed while held
-    float dpad_speed = speed * VITA_DPAD_SPEED_RATIO;
+    // d-pad nudges the cursor at its own speed while held
+    float dpad_speed = (float)mud->options->vita_dpad_speed;
     vita_cursor_x += vita_dpad_x * dpad_speed;
     vita_cursor_y += vita_dpad_y * dpad_speed;
 

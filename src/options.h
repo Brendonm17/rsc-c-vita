@@ -175,7 +175,9 @@ typedef struct Options Options;
      "; Vita: left-stick cursor speed (pixels/frame at full deflection)\n"      \
      "vita_cursor_sensitivity = %d\n"                                          \
      "; Vita: analog-stick dead-zone (percent of full deflection)\n"            \
-     "vita_stick_deadzone = %d\n\n"                                            \
+     "vita_stick_deadzone = %d\n"                                              \
+     "; Vita: d-pad cursor speed (pixels/frame while held)\n"                  \
+     "vita_dpad_speed = %d\n\n"                                                \
      "; Keep a combat spell armed so clicking an enemy re-casts it\n"          \
      "autocast = %d\n"                                                         \
      "; Favourite spells/prayers pinned to the top of the list (bitmasks)\n"   \
@@ -323,6 +325,9 @@ struct Options {
 
     // Vita: analog-stick dead-zone as a percent of full deflection
     int vita_stick_deadzone;
+
+    // Vita: d-pad cursor speed, pixels per frame while held
+    int vita_dpad_speed;
 
     // keep a combat spell armed so clicking an enemy re-casts it
     int autocast;

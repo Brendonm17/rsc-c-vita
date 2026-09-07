@@ -412,6 +412,14 @@ void mudclient_create_options_panel(mudclient *mud) {
     mud->control_options[control] = &mud->options->transaction_menus;
     mud->control_option_types[control] = ADDITIONAL_OPTIONS_CHECKBOX;
 
+#if defined(__vita__)
+    // ninth left-column row: analog dead-zone, < > arrows
+    y += OPTION_HORIZ_GAP;
+    vita_add_adjuster(mud->panel_control_options, "@whi@Stick dead-zone: ",
+                      &mud->options->vita_stick_deadzone, 5, 60, 5, VITA_ADJ_INT,
+                      26, x, y);
+#endif
+
     // Offer-X rows live in the right column
     x += (ADDITIONAL_OPTIONS_WIDTH - 4) / 2;
     y = ui_y + OPTION_HORIZ_GAP + ADDITIONAL_OPTIONS_TAB_HEIGHT + 4;
@@ -491,15 +499,15 @@ void mudclient_create_options_panel(mudclient *mud) {
     mud->control_option_types[control] = ADDITIONAL_OPTIONS_INT;
 
 #if defined(__vita__)
-    // joystick: left-stick cursor speed + analog dead-zone, < > arrows
+    // joystick: left-stick cursor speed + d-pad cursor speed, < > arrows
     y += OPTION_HORIZ_GAP;
     vita_add_adjuster(mud->panel_control_options, "@whi@Cursor speed: ",
                       &mud->options->vita_cursor_sensitivity, 4, 40, 2,
                       VITA_ADJ_INT, 26, x, y);
 
     y += OPTION_HORIZ_GAP;
-    vita_add_adjuster(mud->panel_control_options, "@whi@Stick dead-zone: ",
-                      &mud->options->vita_stick_deadzone, 5, 60, 5, VITA_ADJ_INT,
+    vita_add_adjuster(mud->panel_control_options, "@whi@D-pad speed: ",
+                      &mud->options->vita_dpad_speed, 1, 40, 1, VITA_ADJ_INT,
                       26, x, y);
 #endif
 

@@ -103,6 +103,7 @@ void options_set_defaults(Options *options) {
     options->vita_cursor_style = 0;
     options->vita_cursor_sensitivity = 14;
     options->vita_stick_deadzone = 37;
+    options->vita_dpad_speed = 7;
 
     options->autocast = 0;
     options->spell_favourites_lo = 0;
@@ -205,6 +206,7 @@ void options_set_vanilla(Options *options) {
     options->vita_cursor_style = 0;
     options->vita_cursor_sensitivity = 14;
     options->vita_stick_deadzone = 37;
+    options->vita_dpad_speed = 7;
 
     options->autocast = 0;
     options->spell_favourites_lo = 0;
@@ -363,6 +365,7 @@ void options_save(Options *options) {
             options->vita_cursor_style,       //
             options->vita_cursor_sensitivity, //
             options->vita_stick_deadzone,     //
+            options->vita_dpad_speed,         //
             options->autocast,                //
             options->spell_favourites_lo,     //
             options->spell_favourites_hi,     //
@@ -453,6 +456,7 @@ void options_load(Options *options) {
     OPTION_INI_INT("vita_cursor_sensitivity", options->vita_cursor_sensitivity, 4,
                    40);
     OPTION_INI_INT("vita_stick_deadzone", options->vita_stick_deadzone, 5, 60);
+    OPTION_INI_INT("vita_dpad_speed", options->vita_dpad_speed, 1, 40);
     OPTION_INI_INT("autocast", options->autocast, 0, 1);
     OPTION_INI_INT("spell_favourites_lo", options->spell_favourites_lo, INT32_MIN, INT32_MAX);
     OPTION_INI_INT("spell_favourites_hi", options->spell_favourites_hi, INT32_MIN, INT32_MAX);
