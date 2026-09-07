@@ -24,6 +24,7 @@
 #include "sp-net.h"
 #include "sp-pathfind.h"
 #include "sp-alloc.h"
+#include "diag.h"
 #ifdef __vita__
 #include <psp2/io/fcntl.h>
 #include <psp2/io/dirent.h>
@@ -185,6 +186,19 @@ void singleplayer_set_loading_sleep_us(int us) { sp_loading_sleep_us = us; }
 // QuickJS state, server thread only
 static JSRuntime *sp_rt = NULL;
 static JSContext *sp_ctx = NULL;
+
+#ifdef RSC_DIAG
+// -DRSC_DIAG only: logs QuickJS heap usage (malloc, used, blocks, objects, atoms)
+static void sp_diag_memory(const char *tag) {
+    if (!sp_rt) return;
+    JSMemoryUsage mu;
+    JS_ComputeMemoryUsage(sp_rt, &mu);
+    DIAG("js heap[%s] malloc=%lld KB used=%lld KB blocks=%lld objects=%lld "
+         "atoms=%lld", tag, (long long)(mu.malloc_size / 1024),
+         (long long)(mu.memory_used_size / 1024), (long long)mu.malloc_count,
+         (long long)mu.obj_count, (long long)mu.atom_count);
+}
+#endif
 static JSValue sp_obj, sp_fn_pump, sp_fn_start, sp_fn_connect, sp_fn_send,
     sp_fn_disconnect, sp_socket_id;
 
@@ -504,13 +518,27 @@ static JSValue host_path_bind(JSContext *ctx, JSValueConst t, int argc,
     return JS_TRUE;
 }
 
-// validStep(x, y, dx, dy) -> true/false on the bound grid, null when no grid is bound
+// integral, finite JS number -> int32; undefined, NaN, fractions and out-of-range values are refused
+static int sp_js_int_arg(JSContext *ctx, JSValueConst val, int32_t *out) {
+    double d;
+    if (!JS_IsNumber(val)) return 0;
+    if (JS_ToFloat64(ctx, &d, val) < 0) return 0;
+    if (!isfinite(d) || d != floor(d) || d > 2147483647.0 ||
+        d < -2147483648.0) {
+        return 0;
+    }
+    *out = (int32_t)d;
+    return 1;
+}
+
+// validStep(x, y, dx, dy) -> true/false on the bound grid; null when no grid is bound or an arg is not an
+// integer (the JS pathfinder answers those)
 static JSValue host_valid_step(JSContext *ctx, JSValueConst t, int argc,
                                JSValueConst *argv) {
     if (argc < 4 || sp_path_grid.bits == NULL) return JS_NULL;
     int32_t v[4];
     for (int i = 0; i < 4; i++) {
-        if (JS_ToInt32(ctx, &v[i], argv[i]) < 0) return JS_NULL;
+        if (!sp_js_int_arg(ctx, argv[i], &v[i])) return JS_NULL;
     }
     return sp_path_valid_step(&sp_path_grid, v[0], v[1], v[2], v[3]) ? JS_TRUE
                                                                      : JS_FALSE;
@@ -523,7 +551,8 @@ static JSValue host_find_path(JSContext *ctx, JSValueConst t, int argc,
     if (argc < 7 || sp_path_grid.bits == NULL) return JS_NULL;
     int32_t v[7];
     for (int i = 0; i < 7; i++) {
-        if (JS_ToInt32(ctx, &v[i], argv[i]) < 0) return JS_NULL;
+        // a non-integer start/goal has no path (the JS A* answers null too)
+        if (!sp_js_int_arg(ctx, argv[i], &v[i])) return JS_NULL;
     }
     static int32_t blocked[4096 * 2];
     int blocked_count = 0;
@@ -639,8 +668,12 @@ void singleplayer_set_world(const char *id) {
         snprintf(new_id, sizeof(new_id), "%s", id);
     }
 
-    // switching worlds after boot: tear down; the next login boots fresh
-    if (sp_thread_started && strcmp(new_id, sp_active_world) != 0) {
+    // a server thread is still up (world switch or re-entry): tear it down; the next login boots a fresh runtime
+    if (sp_thread_started) {
+#ifdef RSC_DIAG
+        DIAG("set_world '%s' -> '%s': stopping the live runtime first",
+             sp_active_world, new_id);
+#endif
         singleplayer_stop();
     }
 
@@ -1201,20 +1234,54 @@ int singleplayer_players_delete(const char *world_id, const char *username) {
     return rc;
 }
 
-// delete every save file for a world: unlink players + playerID, rmdir the per-world folder; never the shared root
-void singleplayer_world_wipe(const char *world_id) {
+// remove every regular file directly inside dir (never a subfolder)
+static void sp_wipe_dir_files(const char *dir) {
     char path[512];
-    sp_world_file_path(world_id, "players", path, sizeof(path));
-    remove(path);
-    sp_world_file_path(world_id, "playerID", path, sizeof(path));
-    remove(path);
+#ifdef __vita__
+    SceUID dfd = sceIoDopen(dir);
+    if (dfd < 0) return;
+    SceIoDirent ent;
+    memset(&ent, 0, sizeof(ent));
+    while (sceIoDread(dfd, &ent) > 0) {
+        if (SCE_S_ISDIR(ent.d_stat.st_mode)) continue;
+        snprintf(path, sizeof(path), "%s/%s", dir, ent.d_name);
+        remove(path);
+        memset(&ent, 0, sizeof(ent));
+    }
+    sceIoDclose(dfd);
+#else
+    DIR *dp = opendir(dir);
+    if (!dp) return;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
+            continue;
+        }
+        snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
+        struct stat st;
+        if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) continue;
+        remove(path);
+    }
+    closedir(dp);
+#endif
+}
+
+// delete every save file for a world: wipe every regular file in its folder, then rmdir it; the root world
+// lives in the shared save dir itself: only its regular files go, never the other worlds' folders
+void singleplayer_world_wipe(const char *world_id) {
     int is_root = !world_id || world_id[0] == '\0' ||
                   strcmp(world_id, "default") == 0;
-    if (!is_root) {
-        char dir[512];
-        snprintf(dir, sizeof(dir), "%s/%s", SP_SAVE_DIR, world_id);
-        rmdir(dir);
+    char dir[512];
+
+    if (is_root) {
+        snprintf(dir, sizeof(dir), "%s", SP_SAVE_DIR);
+        sp_wipe_dir_files(dir);
+        return;
     }
+
+    snprintf(dir, sizeof(dir), "%s/%s", SP_SAVE_DIR, world_id);
+    sp_wipe_dir_files(dir);
+    rmdir(dir);
 }
 
 // SP bot management (world-editor "Bots" tab); bot-defs.json = client-owned plain-JSON array of bot defs
@@ -1770,11 +1837,18 @@ static int sp_boot(void) {
 #endif
     if (!sp_rt) return -1;
     JS_SetGCThreshold(sp_rt, 128 * 1024 * 1024);
+#ifdef RSC_DIAG
+    DIAG("sp runtime CREATED (world '%s')", sp_active_world);
+#endif
     JS_SetMaxStackSize(sp_rt, 1024 * 1024);
     sp_ctx = JS_NewContext(sp_rt);
     if (!sp_ctx) return -1;
 
     JSValue global = JS_GetGlobalObject(sp_ctx);
+#ifdef RSC_DIAG
+    // -DRSC_DIAG only: turns on the embedded server's own diag console traces
+    JS_SetPropertyStr(sp_ctx, global, "__spDiag", JS_TRUE);
+#endif
     JSValue host = JS_NewObject(sp_ctx);
     JS_SetPropertyStr(sp_ctx, host, "print",
                       JS_NewCFunction(sp_ctx, host_print, "print", 1));
@@ -1993,6 +2067,10 @@ static int sp_boot(void) {
 static void sp_free_engine(void) {
     sp_prefetch_free(); // reap the helper thread + drop its buffers
     if (!sp_ctx) return;
+#ifdef RSC_DIAG
+    sp_diag_memory("before-free");
+    DIAG("sp runtime FREED (world '%s')", sp_active_world);
+#endif
     JS_FreeValue(sp_ctx, sp_fn_pump);
     JS_FreeValue(sp_ctx, sp_fn_start);
     JS_FreeValue(sp_ctx, sp_fn_connect);
@@ -2143,6 +2221,10 @@ static void sp_thread_run(void) {
         return;
     }
     atomic_store(&sp_ready, 1);
+#ifdef RSC_DIAG
+    sp_diag_memory("ready");
+    uint64_t diag_last_mem = sp_mono_ms();
+#endif
 
     uint8_t inbuf[8192];
     while (!atomic_load(&sp_thread_quit)) {
@@ -2185,6 +2267,12 @@ static void sp_thread_run(void) {
         sp_guests_pump();
 
         sp_pump();
+#ifdef RSC_DIAG
+        if (sp_mono_ms() - diag_last_mem >= 60000) {
+            diag_last_mem = sp_mono_ms();
+            sp_diag_memory("periodic");
+        }
+#endif
         usleep(3000); // ~3ms; 640ms world tick fires here when due
     }
 

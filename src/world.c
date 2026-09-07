@@ -789,6 +789,33 @@ void world_free_models(World *world) {
 #endif
 }
 
+#ifdef RSC_DIAG
+// -DRSC_DIAG only: the terrain mesh vertex height at a tile corner, -999999 when the chunk has no model
+int world_diag_mesh_height(World *world, int tile_x, int tile_y) {
+    int chunk_x = tile_x / 12;
+    int chunk_y = tile_y / 12;
+
+    if (tile_x < 0 || tile_y < 0 || chunk_x >= 8 || chunk_y >= 8) {
+        return -999999;
+    }
+
+    GameModel *game_model = world->terrain_models[chunk_x + chunk_y * 8];
+
+    if (game_model == NULL) {
+        return -999999;
+    }
+
+    for (int i = 0; i < game_model->vertex_count; i++) {
+        if (game_model->vertex_x[i] == tile_x * TILE_SIZE &&
+            game_model->vertex_z[i] == tile_y * TILE_SIZE) {
+            return game_model->vertex_y[i];
+        }
+    }
+
+    return -999999;
+}
+#endif
+
 void world_reset(World *world, int dispose) {
     // a detached (prefetch) world's models are in no scene; never touch its scene here
     int touch_scene = !world->detached;

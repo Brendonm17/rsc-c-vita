@@ -1702,6 +1702,10 @@ void mudclient_item_display_name(mudclient *mud, int item_id, int noted,
 void mudclient_draw_noted_item(mudclient *mud, int x, int y, int slot_width,
                                int slot_height, int item_id, int inset_y);
 int mudclient_get_wilderness_depth(mudclient *mud);
+#ifdef RSC_DIAG
+// -DRSC_DIAG only: logs scenery models whose height disagrees with the terrain under them
+void mudclient_diag_object_audit(mudclient *mud, const char *tag);
+#endif
 void mudclient_draw_item(mudclient *mud, int x, int y, int slot_width,
                          int slot_height, int item_id);
 int main(int argc, char **argv);

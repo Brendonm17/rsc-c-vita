@@ -1080,7 +1080,7 @@ static void sp_editor_delete(mudclient *mud) {
         sp_editor_shown = 0;
         return;
     }
-    // deletes this world's save files (players + playerID keys) too
+    // deletes this world's save files too: every regular file in its folder, then the folder itself
     singleplayer_world_wipe(sp_list[sp_editor_index].id);
 
     for (int i = sp_editor_index; i < sp_count - 1; i++) {

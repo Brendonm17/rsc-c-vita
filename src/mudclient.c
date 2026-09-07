@@ -1,6 +1,7 @@
 #include "mudclient.h"
 #include "protocol177.h"
 #include "online-defs.h"
+#include "diag.h"
 #include "custom-defs.h"
 
 #ifdef WITH_SINGLEPLAYER
@@ -3411,6 +3412,34 @@ static void mudclient_region_rebase_objects(mudclient *mud, int offset_x,
         int base_x = ((object_x + object_x + object_width) * MAGIC_LOC) / 2;
         int base_y = ((object_y + object_y + object_height) * MAGIC_LOC) / 2;
 
+#ifdef RENDER_GL
+        // baked scenery vertices are window-space: restore the prototype's model-local ones before
+        // re-placing, then rebake once every object is re-placed
+        {
+            GameModel *prototype =
+                mud->game_models[game_data.objects[object_id].model_index];
+
+            // pointer identity: a baked model's vertex arrays point into the bake arena, not the prototype's
+            if (game_model->vertex_x != prototype->vertex_x ||
+                game_model->vertex_y != prototype->vertex_y ||
+                game_model->vertex_z != prototype->vertex_z) {
+                game_model->vertex_x = prototype->vertex_x;
+                game_model->vertex_y = prototype->vertex_y;
+                game_model->vertex_z = prototype->vertex_z;
+
+                // draw from the prototype's own buffer with the per-model transform until the rebake lands
+                game_model->gl_buffer = prototype->gl_buffer;
+                game_model->gl_vbo_offset = prototype->gl_vbo_offset;
+                game_model->gl_ebo_offset = prototype->gl_ebo_offset;
+                game_model->gl_ebo_length = prototype->gl_ebo_length;
+                game_model->gl_noclip_ebo_length =
+                    prototype->gl_noclip_ebo_length;
+                game_model->gl_clip_ebo_offset = prototype->gl_clip_ebo_offset;
+                game_model->gl_clip_ebo_length = prototype->gl_clip_ebo_length;
+            }
+        }
+#endif
+
         if (object_x >= 0 && object_y >= 0 && object_x < 96 && object_y < 96) {
             scene_add_model(mud->scene, game_model);
 
@@ -3426,6 +3455,10 @@ static void mudclient_region_rebase_objects(mudclient *mud, int offset_x,
         }
     }
 
+#ifdef RENDER_GL
+    // every scenery model moved: rebuild the object buffers
+    mud->gl_region_bake_pending = 1;
+#endif
 }
 
 // wall objects, ground items and characters follow the same shift
@@ -3700,6 +3733,13 @@ static void mudclient_region_promote_build(mudclient *mud) {
         e->realized = 0;      // upload spread over the next frames
         e->realize_index = 0; // start uploading buffer 0 next frame
         e->last_touch = ++mud->region_touch_clock;
+
+#ifdef RSC_DIAG
+        DIAG("promote slot %d: section %d,%d plane %d world %p buffers %p "
+             "len %d",
+             idx, e->sx, e->sy, e->plane, (void *)e->world,
+             (void *)e->buffers, e->buffer_length);
+#endif
     }
 
     mud->region_next_world = NULL;
@@ -3791,8 +3831,9 @@ static void mudclient_region_realize_finish(mudclient *mud,
 // only on the section
 static void mudclient_region_build_into(mudclient *mud, int idx, int sx, int sy,
                                         int plane) {
-    if (mud->region_bake_state != 0) {
-        return; // one background worker at a time; retry next packet
+    if (mud->region_bake_state != 0 || mud->gl_region_bake_pending) {
+        // one background worker at a time, and a pending rebake goes first; retry next packet
+        return;
     }
 
     World *world = malloc(sizeof(World));
@@ -3867,6 +3908,11 @@ static void mudclient_region_build_into(mudclient *mud, int idx, int sx, int sy,
     mud->region_cache[idx].sy = sy;
     mud->region_cache[idx].plane = plane;
     mud->region_load_state = 1;
+
+#ifdef RSC_DIAG
+    DIAG("prefetch build slot %d: section %d,%d plane %d", idx, sx, sy,
+         plane);
+#endif
 }
 
 // proximity request: build (sx,sy,plane) unless it's already cached or in flight
@@ -3991,6 +4037,13 @@ static World *mudclient_region_cache_take(mudclient *mud, int sx, int sy,
     *buffer_length = e->buffer_length;
     *realized = 1; // fully realized -> install is a pointer swap
 
+#ifdef RSC_DIAG
+    DIAG("cache_take slot %d: section %d,%d plane %d (wanted %d,%d plane %d) "
+         "world %p buffers %p len %d realized %d", idx, e->sx, e->sy,
+         e->plane, sx, sy, plane, (void *)e->world, (void *)e->buffers,
+         e->buffer_length, e->realized);
+#endif
+
     e->state = REGION_SLOT_EMPTY;
     e->world = NULL;
     e->buffers = NULL;
@@ -4023,6 +4076,14 @@ static void mudclient_region_install_prebuilt(mudclient *mud, World *world,
 #endif
 
     scene_dispose(mud->scene);
+
+#ifdef RSC_DIAG
+    DIAG("install_prebuilt: world %p buffers %p len %d realized %d <- old "
+         "world %p old buffers %p len %d (scene buffers %p)",
+         (void *)world, (void *)buffers, buffer_length, realized, (void *)old,
+         (void *)old_buffers, old_buffer_length,
+         (void *)mud->scene->gl_terrain_buffers);
+#endif
 
     mud->world = world;
 
@@ -4155,6 +4216,19 @@ int mudclient_load_next_region(mudclient *mud, int lx, int ly) {
     int ax = mud->region_x;
     int ay = mud->region_y;
 
+#ifdef RSC_DIAG
+    DIAG("crossing -> section %d,%d plane %d (from region %d,%d "
+         "last_plane %d) player_abs=%d,%d prebuilt=%d force_sync=%d objects=%d",
+         section_x, section_y, mud->plane_index, ax, ay,
+         mud->last_plane_index, lx, ly,
+#ifdef MUD_REGION_ASYNC
+         prebuilt != NULL,
+#else
+         0,
+#endif
+         mud->region_load_force_sync, mud->object_count);
+#endif
+
     mudclient_region_set_window(mud, section_x, section_y, mud->plane_index);
 
 #ifdef MUD_REGION_ASYNC
@@ -4213,6 +4287,12 @@ int mudclient_load_next_region(mudclient *mud, int lx, int ly) {
     mudclient_region_rebase_rest(mud, offset_x, offset_y);
 
     mud->world->player_alive = 1;
+
+#ifdef RSC_DIAG
+    DIAG("crossing done: region=%d,%d offset=%d,%d", mud->region_x,
+         mud->region_y, offset_x, offset_y);
+    mudclient_diag_object_audit(mud, "after-crossing");
+#endif
 
     return 1;
 }
@@ -4669,10 +4749,41 @@ void mudclient_handle_game_input(mudclient *mud) {
         game_character_move(mud->players[i]);
     }
 
+#ifdef RSC_DIAG
+    // heartbeat: logs position plus the scenery/terrain check every 2000 frames (about 40 s)
+    {
+        static int diag_frames = 0;
+
+        if (++diag_frames >= 2000) {
+            diag_frames = 0;
+
+            DIAG("heartbeat local=%d,%d abs=%d,%d wild_depth=%d hp=%d/%d "
+                 "death_timer=%d loading=%d",
+                 mud->local_region_x, mud->local_region_y,
+                 mud->local_region_x + mud->plane_width + mud->region_x,
+                 mud->local_region_y + mud->plane_height + mud->region_y,
+                 mudclient_get_wilderness_depth(mud),
+                 mud->player_skill_current[SKILL_HITS],
+                 mud->player_skill_base[SKILL_HITS], mud->death_screen_timeout,
+                 mud->loading_area);
+            mudclient_diag_object_audit(mud, "heartbeat");
+        }
+    }
+#endif
+
     if (mud->death_screen_timeout > 0) {
         mud->death_screen_timeout--;
 
         if (mud->death_screen_timeout == 0) {
+#ifdef RSC_DIAG
+            DIAG("death screen over at local=%d,%d abs=%d,%d wild_depth=%d "
+                 "region=%d,%d loading=%d",
+                 mud->local_region_x, mud->local_region_y,
+                 mud->local_region_x + mud->plane_width + mud->region_x,
+                 mud->local_region_y + mud->plane_height + mud->region_y,
+                 mudclient_get_wilderness_depth(mud), mud->region_x,
+                 mud->region_y, mud->loading_area);
+#endif
             mudclient_show_message(mud,
                                    "You have been granted another life. Be "
                                    "more careful this time!",
@@ -7030,6 +7141,19 @@ void mudclient_draw_game(mudclient *mud) {
     if (!mud->loading_area) {
         int wilderness_depth = mudclient_get_wilderness_depth(mud);
 
+#ifdef RSC_DIAG
+        if ((wilderness_depth > 0) != mud->is_in_wilderness) {
+            DIAG("wilderness flip -> %d depth=%d local=%d,%d plane_h=%d "
+                 "region=%d,%d abs=%d,%d death_timer=%d",
+                 wilderness_depth > 0, wilderness_depth, mud->local_region_x,
+                 mud->local_region_y, mud->plane_height, mud->region_x,
+                 mud->region_y,
+                 mud->local_region_x + mud->plane_width + mud->region_x,
+                 mud->local_region_y + mud->plane_height + mud->region_y,
+                 mud->death_screen_timeout);
+        }
+#endif
+
         mud->is_in_wilderness = wilderness_depth > 0;
 
         if (mud->is_in_wilderness) {
@@ -7950,6 +8074,192 @@ int mudclient_get_wilderness_depth(mudclient *mud) {
 
     return wilderness_depth;
 }
+
+#ifdef RSC_DIAG
+// -DRSC_DIAG only: logs scenery models whose height disagrees with the terrain under them, terrain mesh
+// vertices that disagree with the height array, and terrain models not paired with a scene buffer
+void mudclient_diag_object_audit(mudclient *mud, const char *tag) {
+    int mismatches = 0;
+    int checked = 0;
+    int worst = 0;
+    int mesh_mismatches = 0;
+    int mesh_missing = 0;
+
+    for (int i = 0; i < mud->object_count; i++) {
+        int object_x = mud->objects[i].x;
+        int object_y = mud->objects[i].y;
+        int object_id = mud->objects[i].id;
+        GameModel *model = mud->objects[i].model;
+
+        if (model == NULL || object_x < 0 || object_y < 0 || object_x >= 96 ||
+            object_y >= 96) {
+            continue;
+        }
+
+        int object_direction = mud->objects[i].direction;
+        int object_width = 0;
+        int object_height = 0;
+
+        if (object_direction == DIR_NORTH || object_direction == DIR_SOUTH) {
+            object_width = game_data.objects[object_id].width;
+            object_height = game_data.objects[object_id].height;
+        } else {
+            object_height = game_data.objects[object_id].width;
+            object_width = game_data.objects[object_id].height;
+        }
+
+        int base_x = ((object_x + object_x + object_width) * MAGIC_LOC) / 2;
+        int base_y = ((object_y + object_y + object_height) * MAGIC_LOC) / 2;
+        int expected = -world_get_elevation(mud->world, base_x, base_y);
+
+        if (object_id == WINDMILL_SAILS_ID) {
+            expected -= 480;
+        }
+
+        checked++;
+
+        int delta = model->base_y - expected;
+
+        if (delta < 0) {
+            delta = -delta;
+        }
+
+        if (delta > 4) {
+            mismatches++;
+
+            if (delta > worst) {
+                worst = delta;
+            }
+
+            if (mismatches <= 4) {
+                DIAG("  float id=%d tile=%d,%d model_y=%d terrain_y=%d "
+                     "delta=%d",
+                     object_id, object_x, object_y, model->base_y, expected,
+                     model->base_y - expected);
+            }
+        }
+
+        // drawn ground: terrain mesh vertex at this tile corner vs the height array under the object
+        int mesh_y = world_diag_mesh_height(mud->world, object_x, object_y);
+        int array_y = -world_get_elevation(mud->world, object_x * TILE_SIZE,
+                                           object_y * TILE_SIZE);
+
+        if (mesh_y != -999999) {
+            int mesh_delta = mesh_y - array_y;
+
+            if (mesh_delta < 0) {
+                mesh_delta = -mesh_delta;
+            }
+
+            if (mesh_delta > 4) {
+                mesh_mismatches++;
+
+                if (mesh_mismatches <= 4) {
+                    DIAG("  MESH id=%d tile=%d,%d mesh_y=%d array_y=%d "
+                         "delta=%d",
+                         object_id, object_x, object_y, mesh_y, array_y,
+                         mesh_y - array_y);
+                }
+            }
+        } else {
+            mesh_missing++;
+        }
+    }
+
+    // pairing: every terrain model of the live world must point at one of scene->gl_terrain_buffers
+    int models_null = 0;
+    int models_unpaired = 0;
+    int mirror_checked = 0;
+    int mirror_mismatch = 0;
+
+    for (int i = 0; i < TERRAIN_COUNT; i++) {
+        GameModel *terrain = mud->world->terrain_models[i];
+
+        if (terrain == NULL) {
+            models_null++;
+            continue;
+        }
+
+        if (terrain->gl_buffer == NULL) {
+            continue;
+        }
+
+        int paired = 0;
+
+        for (int j = 0; j < mud->scene->gl_terrain_buffer_length; j++) {
+            if (mud->scene->gl_terrain_buffers[j] == terrain->gl_buffer) {
+                paired = 1;
+                break;
+            }
+        }
+
+        if (!paired) {
+            models_unpaired++;
+
+            if (models_unpaired <= 2) {
+                DIAG("  UNPAIRED terrain model %d gl_buffer=%p scene has %d "
+                     "buffers (first %p)",
+                     i, (void *)terrain->gl_buffer,
+                     mud->scene->gl_terrain_buffer_length,
+                     mud->scene->gl_terrain_buffer_length > 0
+                         ? (void *)mud->scene->gl_terrain_buffers[0]
+                         : NULL);
+            }
+        }
+
+        // CPU mirror behind the GPU copy: its first record for this model must be the model's first face vertex
+        gl_vertex_buffer *vb = terrain->gl_buffer;
+
+        if (vb->vbo_mirror != NULL && terrain->face_count > 0 &&
+            (terrain->gl_vbo_offset + 1) * (int)sizeof(gl_model_vertex) <=
+                vb->vbo_size) {
+            gl_model_vertex *rec =
+                (gl_model_vertex *)vb->vbo_mirror + terrain->gl_vbo_offset;
+            int vi = terrain->face_vertices[0][0];
+            float ex = VERTEX_TO_FLOAT(terrain->vertex_x[vi]);
+            float ey = VERTEX_TO_FLOAT(terrain->vertex_y[vi]);
+            float ez = VERTEX_TO_FLOAT(terrain->vertex_z[vi]);
+
+            mirror_checked++;
+
+            if (fabsf(rec->x - ex) > 0.01f || fabsf(rec->y - ey) > 0.01f ||
+                fabsf(rec->z - ez) > 0.01f) {
+                mirror_mismatch++;
+
+                if (mirror_mismatch <= 2) {
+                    DIAG("  MIRROR terrain model %d rec=(%.1f,%.1f,%.1f) "
+                         "model=(%.1f,%.1f,%.1f) vbo_off=%d",
+                         i, rec->x, rec->y, rec->z, ex, ey, ez,
+                         terrain->gl_vbo_offset);
+                }
+            }
+        }
+    }
+
+    int player_x = mud->local_player != NULL ? mud->local_player->current_x
+                                             : -1;
+    int player_y = mud->local_player != NULL ? mud->local_player->current_y
+                                             : -1;
+    int player_terrain =
+        player_x >= 0 ? world_get_elevation(mud->world, player_x, player_y)
+                      : 0;
+    int player_mesh = player_x >= 0
+                          ? world_diag_mesh_height(mud->world,
+                                                   player_x / TILE_SIZE,
+                                                   player_y / TILE_SIZE)
+                          : -999999;
+
+    DIAG("object_audit[%s] checked=%d floating=%d worst=%d MESH_off=%d "
+         "mesh_missing=%d terrain_null=%d unpaired=%d mirror=%d/%d_bad "
+         "objects=%d world=%p player=%d,%d terrain=%d mesh=%d region=%d,%d "
+         "plane=%d",
+         tag, checked, mismatches, worst, mesh_mismatches, mesh_missing,
+         models_null, models_unpaired, mirror_checked, mirror_mismatch,
+         mud->object_count, (void *)mud->world, player_x, player_y,
+         player_terrain, player_mesh, mud->region_x, mud->region_y,
+         mud->plane_index);
+}
+#endif
 
 void mudclient_draw_item(mudclient *mud, int x, int y, int slot_width,
                          int slot_height, int item_id) {

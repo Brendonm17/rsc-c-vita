@@ -44,6 +44,7 @@ endif
 # NDEBUG: asserts off, packet over-read guards recover instead of aborting
 CFLAGS  := -std=gnu99 -fwrapv -O2 -ffast-math -Wall -DNDEBUG \
            -DSDL2 -DRENDER_GL -I ./cglm/include $(SP_CFLAGS) \
+           $(RSC_DIAG_CFLAGS) \
            $(shell $(PKGCONF) --cflags sdl2)
 
 LDFLAGS := -Wl,-q -Wl,--undefined=_newlib_heap_size_user -Wl,--undefined=sceUserMainThreadStackSize

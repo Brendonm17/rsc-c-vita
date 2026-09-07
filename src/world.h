@@ -177,6 +177,10 @@ int world_is_under_roof(World *world, int x, int y);
 int world_get_tile_direction(World *world, int x, int y);
 void world_set_tile_direction(World *world, int x, int y, int direction);
 int world_get_elevation(World *world, int x, int y);
+#ifdef RSC_DIAG
+// -DRSC_DIAG only: terrain mesh vertex height at a tile corner, -999999 when the chunk has no model
+int world_diag_mesh_height(World *world, int tile_x, int tile_y);
+#endif
 int world_get_wall_roof(World *world, int x, int y);
 void world_register_wall_object(World *world, int x, int y, int dir, int id);
 void world_register_object(World *world, int x, int y, int id);

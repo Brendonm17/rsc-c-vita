@@ -1,6 +1,18 @@
 #include "packet-handler.h"
 #include "online-defs.h"
 #include "protocol177.h"
+#include "diag.h"
+
+#ifdef RSC_DIAG
+// -DRSC_DIAG only: last logged raw region-players position, packets still to trace after a death or
+// world-info, and the other-player / npc hit counters
+static int diag_last_raw_x = -1;
+static int diag_last_raw_y = -1;
+static int diag_trace_packets = 0;
+static int diag_region_packets = 0;
+static int diag_other_hits = 0;
+static int diag_npc_hits = 0;
+#endif
 
 #ifndef REVISION_177
 // map the 14 server equipment slots to the 11-slot paperdoll: helm/body/skirt
@@ -217,6 +229,18 @@ static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
             int damage = get_unsigned_byte(data, offset++, size);
             int current = get_unsigned_byte(data, offset++, size);
             int max = get_unsigned_byte(data, offset++, size);
+
+#ifdef RSC_DIAG
+            if (player == NULL) {
+                DIAG("orsc hit for UNKNOWN player idx=%d dmg=%d hp=%d/%d",
+                     player_index, damage, current, max);
+            } else if (player == mud->local_player) {
+                DIAG("orsc hit LOCAL idx=%d dmg=%d hp=%d/%d", player_index,
+                     damage, current, max);
+            } else {
+                diag_other_hits++;
+            }
+#endif
 
             if (player != NULL) {
                 player->damage_taken = damage;
@@ -906,6 +930,14 @@ void mudclient_packet_tick(mudclient *mud) {
         mud->plane_index = get_unsigned_short(data, 7, size);
         mud->plane_multiplier = get_unsigned_short(data, 9, size);
         mud->plane_height -= mud->plane_index * mud->plane_multiplier;
+#ifdef RSC_DIAG
+        DIAG("world_info idx=%d plane_w=%d plane_h=%d plane_idx=%d mult=%d "
+             "(region %d,%d death_timer=%d)",
+             mud->local_player_server_index, mud->plane_width,
+             mud->plane_height, mud->plane_index, mud->plane_multiplier,
+             mud->region_x, mud->region_y, mud->death_screen_timeout);
+        diag_trace_packets = 8;
+#endif
         break;
     case SERVER_REGION_PLAYERS: {
         mud->known_player_count = mud->player_count;
@@ -924,11 +956,53 @@ void mudclient_packet_tick(mudclient *mud) {
         int sprite = get_bit_mask(data, offset, size, 4);
         offset += 4;
 
+#ifdef RSC_DIAG
+        // logs the raw wire position before the region window is applied: on a jump over 2 tiles, for a few
+        // packets after a death or world-info, during the death screen, and every 64th packet
+        {
+            int raw_x = mud->local_region_x;
+            int raw_y = mud->local_region_y;
+            int jump = diag_last_raw_x >= 0 &&
+                       (abs(raw_x - diag_last_raw_x) > 2 ||
+                        abs(raw_y - diag_last_raw_y) > 2);
+            int abs_y = raw_y + mud->plane_height;
+            int abs_x = raw_x + mud->plane_width;
+
+            diag_region_packets++;
+
+            if (jump || diag_trace_packets > 0 ||
+                mud->death_screen_timeout != 0 ||
+                (diag_region_packets % 64) == 0) {
+                DIAG("region_players raw=%d,%d abs=%d,%d plane_h=%d "
+                     "region=%d,%d sprite=%d death_timer=%d loading=%d%s "
+                     "(other_hits=%d npc_hits=%d)",
+                     raw_x, raw_y, abs_x, abs_y, mud->plane_height,
+                     mud->region_x, mud->region_y, sprite,
+                     mud->death_screen_timeout, mud->loading_area,
+                     jump ? " JUMP" : "", diag_other_hits, diag_npc_hits);
+                if (diag_trace_packets > 0) {
+                    diag_trace_packets--;
+                }
+            }
+
+            diag_last_raw_x = raw_x;
+            diag_last_raw_y = raw_y;
+        }
+#endif
+
         int has_loaded_region = mudclient_load_next_region(
             mud, mud->local_region_x, mud->local_region_y);
 
         mud->local_region_x -= mud->region_x;
         mud->local_region_y -= mud->region_y;
+
+#ifdef RSC_DIAG
+        if (has_loaded_region) {
+            DIAG("region_players loaded region -> local=%d,%d region=%d,%d",
+                 mud->local_region_x, mud->local_region_y, mud->region_x,
+                 mud->region_y);
+        }
+#endif
 
         // start a background build of the neighbour region the player is approaching
         mudclient_region_proximity_check(mud);
@@ -1206,6 +1280,22 @@ void mudclient_packet_tick(mudclient *mud) {
                 int damage = get_unsigned_byte(data, offset++, size);
                 int current = get_unsigned_byte(data, offset++, size);
                 int max = get_unsigned_byte(data, offset++, size);
+
+#ifdef RSC_DIAG
+                if (player == NULL) {
+                    DIAG("hit for UNKNOWN player idx=%d dmg=%d hp=%d/%d "
+                         "(local idx=%d)",
+                         player_index, damage, current, max,
+                         mud->local_player_server_index);
+                } else if (player == mud->local_player) {
+                    DIAG("hit LOCAL idx=%d dmg=%d hp=%d/%d (skill hits %d/%d)",
+                         player_index, damage, current, max,
+                         mud->player_skill_current[SKILL_HITS],
+                         mud->player_skill_base[SKILL_HITS]);
+                } else {
+                    diag_other_hits++;
+                }
+#endif
 
                 if (player != NULL) {
                     player->damage_taken = damage;
@@ -1566,6 +1656,13 @@ void mudclient_packet_tick(mudclient *mud) {
             // defer the scenery bake and terrain lighting refresh to the next
             // draw_game so it runs once on the final object set
             mud->gl_region_bake_pending = 1;
+#ifdef RSC_DIAG
+            DIAG("region_objects +%d -%d count %d->%d local=%d,%d region=%d,%d",
+                 objects_added, objects_removed, objects_before,
+                 mud->object_count, mud->local_region_x, mud->local_region_y,
+                 mud->region_x, mud->region_y);
+            mudclient_diag_object_audit(mud, "after-objects-packet");
+#endif
         }
 #elif defined(RENDER_3DS_GL)
         world_gl_update_terrain_buffers(mud->world);
@@ -1760,6 +1857,21 @@ void mudclient_packet_tick(mudclient *mud) {
                 int damage_taken = get_unsigned_byte(data, offset++, size);
                 int current_health = get_unsigned_byte(data, offset++, size);
                 int max_health = get_unsigned_byte(data, offset++, size);
+
+#ifdef RSC_DIAG
+                diag_npc_hits++;
+                // the first 200 npc hits are logged, the rest only counted
+                if (npc != NULL && mud->local_player != NULL &&
+                    diag_npc_hits <= 200) {
+                    DIAG("npc hit idx=%d id=%d dmg=%d hp=%d/%d "
+                         "(local hp %d/%d, local opponent-tile %d,%d)",
+                         server_index, npc->npc_id, damage_taken,
+                         current_health, max_health,
+                         mud->player_skill_current[SKILL_HITS],
+                         mud->player_skill_base[SKILL_HITS], npc->current_x,
+                         npc->current_y);
+                }
+#endif
 
                 if (npc != NULL) {
                     npc->damage_taken = damage_taken;
@@ -3121,6 +3233,11 @@ void mudclient_packet_tick(mudclient *mud) {
         }
 
         mud->player_quest_points = get_unsigned_byte(data, offset++, size);
+#ifdef RSC_DIAG
+        DIAG("stat_list skills=%d hits %d/%d", derived,
+             mud->player_skill_current[SKILL_HITS],
+             mud->player_skill_base[SKILL_HITS]);
+#endif
         break;
     }
     case SERVER_PLAYER_STAT_EQUIPMENT_BONUS: {
@@ -3192,6 +3309,13 @@ void mudclient_packet_tick(mudclient *mud) {
 
         mud->player_experience[skill_index] =
             get_unsigned_int(data, offset, size);
+#ifdef RSC_DIAG
+        if (skill_index == SKILL_HITS) {
+            DIAG("stat_update hits %d/%d",
+                 mud->player_skill_current[SKILL_HITS],
+                 mud->player_skill_base[SKILL_HITS]);
+        }
+#endif
         break;
     }
     case SERVER_PLAYER_STAT_FATIGUE: {
@@ -4308,6 +4432,18 @@ void mudclient_packet_tick(mudclient *mud) {
     }
     case SERVER_PLAYER_DIED: {
         mud->death_screen_timeout = 250;
+#ifdef RSC_DIAG
+        DIAG("player_died at local=%d,%d abs=%d,%d plane_idx=%d "
+             "region=%d,%d wild_depth=%d hp=%d/%d",
+             mud->local_region_x, mud->local_region_y,
+             mud->local_region_x + mud->plane_width + mud->region_x,
+             mud->local_region_y + mud->plane_height + mud->region_y,
+             mud->plane_index, mud->region_x, mud->region_y,
+             mudclient_get_wilderness_depth(mud),
+             mud->player_skill_current[SKILL_HITS],
+             mud->player_skill_base[SKILL_HITS]);
+        diag_trace_packets = 12;
+#endif
         break;
     }
     case SERVER_LOGOUT_DENY: {
