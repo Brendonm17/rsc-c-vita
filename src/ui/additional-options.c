@@ -161,9 +161,11 @@ void mudclient_create_options_panel(mudclient *mud) {
 
     for (int i = 0; i < 50; i++) {
         mud->game_option_types[i] = -1;
-        mud->control_option_types[i] = -1;
         mud->ui_option_types[i] = -1;
         mud->bank_option_types[i] = -1;
+    }
+    for (int i = 0; i < 64; i++) {
+        mud->control_option_types[i] = -1;
     }
 
 #if defined(__vita__)
@@ -337,7 +339,7 @@ void mudclient_create_options_panel(mudclient *mud) {
     y = ui_y + OPTION_HORIZ_GAP + ADDITIONAL_OPTIONS_TAB_HEIGHT + 4;
 
     mud->panel_control_options = malloc(sizeof(Panel));
-    panel_new(mud->panel_control_options, mud->surface, 50);
+    panel_new(mud->panel_control_options, mud->surface, 64);
 
     control = mudclient_add_option_panel_checkbox(
         mud->panel_control_options,

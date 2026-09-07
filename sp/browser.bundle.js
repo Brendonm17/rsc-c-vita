@@ -15634,7 +15634,9 @@ class CareerBrain {
                 this.startRelocate(boss);
                 return;
             }
-            const site = this.maybeRelocate();
+            const starved = !!bot._starved;
+            bot._starved = false;
+            const site = this.maybeRelocate(starved);
             if (site) {
                 this.startRelocate(site);
                 return;
@@ -15650,9 +15652,11 @@ class CareerBrain {
     }
 
     // sometimes choose a distant work site to move to (null = stay); only ones the bot's level can handle.
-    maybeRelocate() {
+    // force = a starved task, which always moves on
+    maybeRelocate(force) {
         const p = personality.of(this.bot);
-        if (Math.random() >= 0.3 + p.curiosity * 0.35) {
+        // a starved task (nothing to work here) always moves on; otherwise curiosity rolls
+        if (!force && Math.random() >= 0.3 + p.curiosity * 0.35) {
             return null;
         }
         const here = this.bot;
@@ -16461,7 +16465,16 @@ class CombatBrain {
         const target = this.nearestTarget();
 
         if (target) {
+            this.idleTicks = 0;
             this.engage(target);
+        } else {
+            // nothing to fight for a while: end the career block early
+            this.idleTicks = (this.idleTicks | 0) + 1;
+            if (this.idleTicks >= 60) {
+                this.idleTicks = 0;
+                const br = bot.brain;
+                if (br && br !== this && typeof br.ticksLeft === 'number') { br.ticksLeft = 0; bot._starved = true; }
+            }
         }
     }
 
@@ -16964,6 +16977,15 @@ class ResourceGatherer {
         return best;
     }
 
+    // nothing to work for a while (no tool, nothing in range): end the career block early
+    starve() {
+        this.idleTicks = (this.idleTicks | 0) + 1;
+        if (this.idleTicks < 60) return;
+        this.idleTicks = 0;
+        const br = this.bot && this.bot.brain;
+        if (br && br !== this && typeof br.ticksLeft === 'number') { br.ticksLeft = 0; this.bot._starved = true; }
+    }
+
     // is the committed object still a workable resource?
     stillThere(o) {
         if (!o) {
@@ -16989,10 +17011,12 @@ class ResourceGatherer {
             return;
         }
         if (!p) {
-            return; // unknown skill, nothing to do
+            this.starve(); // unknown skill, nothing to do
+            return;
         }
         if (!hasTool(bot, p)) {
-            return; // no tool, can't gather
+            this.starve(); // no tool, can't gather
+            return;
         }
 
         if (this.state === 'BANK') {
@@ -17013,8 +17037,10 @@ class ResourceGatherer {
         if (!res) {
             // nothing workable in range; clear unreachable so respawns re-qualify
             this.unreachable.clear();
+            this.starve();
             return;
         }
+        this.idleTicks = 0;
 
         if (this.isAdjacent(res)) {
             bot.faceEntity(res);
@@ -17340,6 +17366,11 @@ class WanderBrain {
             return;
         }
 
+        // the engine already moved the bot this tick; a second walk in one tick is refused
+        if (bot.isWalking || (bot.world && bot.moveTick === (bot.world.ticks | 0))) {
+            return;
+        }
+
         // drifted too far: step back toward home, else a random free step
         const dist =
             Math.abs(bot.x - this.home.x) + Math.abs(bot.y - this.home.y);
@@ -17613,441 +17644,484 @@ const ITEMS = ['this', 'this loot', 'this haul', 'the goods', 'my haul'];
 // situation -> tone -> complete lowercase cores (tidy capitalises the final line).
 const G = {
     combat: {
-        cocky: ["come on then, {foe}.", "you're not worth my time, {foe}.", "this won't take long.", "i'll make it quick.", "you should have run."],
-        aggressive: ["have at you!", "no mercy, {foe}!", "i'll tear you apart!", "get over here!", "you're dead where you stand."],
-        eager: ["let's do this!", "finally, some action.", "been waiting for a good fight.", "here we go!"],
-        neutral: ["stand and fight.", "let's settle this.", "en garde, {foe}.", "here we go then."]
+        cocky: ["come on then, {foe}.", "you're not worth my time, {foe}.", "this won't take long.", "i'll make it quick.", "you should have run.", "is that it, {foe}?", "i've had harder fights with a chicken.", "try and keep up, {foe}.", "don't blink, you'll miss it.", "hope you brought food, {foe}.", "this is going in the tales. briefly.", "you're about to be a bones drop.", "shame, i'd have liked a challenge.", "bit brave for something your size, {foe}.", "let's not drag this out.", "you're just xp to me, {foe}.", "i've killed better before breakfast.", "give it your best shot. i'll wait.", "watch and learn, {foe}.", "one swing. maybe two."],
+        aggressive: ["have at you!", "no mercy, {foe}!", "i'll tear you apart!", "get over here!", "you're dead where you stand.", "i'll have your head!", "you'll regret this, {foe}!", "bleed, {foe}!", "nowhere to hide!", "die, {foe}!", "you and me, now!", "i'll bury you here!", "not one step back!", "your bones are mine!", "fight me, {foe}!", "you're finished!", "i'll break you, {foe}!", "no running from me!"],
+        eager: ["let's do this!", "finally, some action.", "been waiting for a good fight.", "here we go!", "oh, a fight! lovely.", "been itching for this all day.", "right, {foe}, let's dance.", "this is the good bit.", "come on, come on!", "bring it on, {foe}!", "xp incoming.", "at last, something to hit.", "i live for this.", "now we're talking.", "swords out, then.", "a scrap! brilliant.", "let's see what you've got, {foe}.", "this beats mining, anyway."],
+        neutral: ["stand and fight.", "let's settle this.", "en garde, {foe}.", "here we go then.", "right, {foe}. you first.", "in we go.", "let's get this over with.", "steady now.", "one more for the tally.", "watch the hits.", "here it comes.", "mind the fatigue.", "fighting {foe}. as you do.", "let's see how this goes.", "no time like the present.", "right then, {foe}.", "keep the food handy.", "work to do."]
     },
     combatWin: {
-        cocky: ["too easy.", "was that meant to be a challenge?", "i didn't even break a sweat.", "you never had a chance.", "is that all you've got?", "predictable.", "and stay down.", "who's next?", "barely a warm-up.", "they never learn.", "i'd say sorry, but i'm not."],
-        pleased: ["got it! that felt good.", "another one down.", "clean kill, that.", "textbook.", "just as i planned.", "ha! got them.", "that's the way!", "clean, quick, done.", "another for the tally.", "that went well."],
-        aggressive: ["stay down.", "that's what you get.", "don't get up.", "next.", "who else wants some?"],
-        humble: ["that was a tough one.", "glad that's over.", "closer than i'd like.", "phew, done.", "phew. that was close.", "lucky, that.", "not my finest, but a win's a win."],
-        neutral: ["down it goes.", "another kill.", "and that's that.", "job done.", "done.", "next.", "that's that sorted.", "right, moving on."]
+        cocky: ["too easy.", "was that meant to be a challenge?", "i didn't even break a sweat.", "you never had a chance.", "is that all you've got?", "predictable.", "and stay down.", "who's next?", "barely a warm-up.", "they never learn.", "i'd say sorry, but i'm not.", "next time bring a friend.", "another one for the bones pile.", "that was practically a tutorial.", "did i even get hit?", "somebody write that down.", "i'd call that a warm-up.", "sit down. oh, you already have.", "faster than a bank run, that.", "rune scimmy says hello.", "and that's why they fear me.", "i almost feel bad. almost.", "the mighty fall. that one just tripped.", "not even a scratch.", "another day, another corpse."],
+        pleased: ["got it! that felt good.", "another one down.", "clean kill, that.", "textbook.", "just as i planned.", "ha! got them.", "that's the way!", "clean, quick, done.", "another for the tally.", "that went well.", "lovely stuff.", "that's more like it.", "good hit, that last one.", "got there in the end.", "smooth as butter.", "oh that was satisfying.", "i'll take that, thank you.", "nice and tidy.", "that's the good stuff.", "and breathe. nice.", "in the bag.", "quality."],
+        aggressive: ["stay down.", "that's what you get.", "don't get up.", "next.", "who else wants some?", "and stay there.", "not so tough now.", "that's for earlier.", "anyone else?", "get up, i dare you.", "you asked for it.", "one down. plenty to go.", "hah! pathetic.", "back in your hole.", "and that's an ending.", "more. i want more.", "come on, who's next!", "i'll take you all on."],
+        humble: ["that was a tough one.", "glad that's over.", "closer than i'd like.", "phew, done.", "phew. that was close.", "lucky, that.", "not my finest, but a win's a win.", "that could've gone either way.", "won't be doing that again in a hurry.", "thank goodness for that.", "i'd better eat before the next one.", "not sure how i managed that.", "nearly needed a sleeping bag after that.", "close. too close.", "the gods were kind there.", "i'll take it, gratefully.", "won't be boasting about that one.", "phew. sit down, me."],
+        neutral: ["down it goes.", "another kill.", "and that's that.", "job done.", "done.", "next.", "that's that sorted.", "right, moving on.", "bones and a bit of loot. fine.", "that's one.", "on to the next.", "good enough.", "well, that's that.", "kill logged.", "shall we go again?", "moving along.", "and rest.", "one more done."]
     },
     combatLow: {
-        panicked: ["this is bad, this is bad.", "i can't take much more!", "where's my food?!", "too close, way too close.", "food, food, where's my food!", "not like this, not like this!", "too much, too much!", "somebody, anybody!"],
-        defiant: ["i'm not done yet!", "you'll have to do better than that.", "still standing.", "not today.", "still here.", "come on then!", "not going down easy."],
-        weary: ["i'm fading here.", "running low...", "need a breather, badly.", "this is wearing me down.", "running on fumes here.", "this one's taking it out of me.", "need to eat. now.", "can't keep this up."],
-        neutral: ["getting dicey.", "hold on now.", "careful, careful.", "that one hurt.", "that hurt.", "careful now.", "getting low.", "should eat."]
+        panicked: ["this is bad, this is bad.", "i can't take much more!", "where's my food?!", "too close, way too close.", "food, food, where's my food!", "not like this, not like this!", "too much, too much!", "somebody, anybody!", "eat, eat, eat!", "why is it hitting so hard!", "i've no lobsters left!", "oh no oh no oh no.", "i'm going to lose my rune!", "nope nope nope.", "run? can i run?", "it's hitting 10s!", "not the bones pile, not today!", "help would be lovely right about now!"],
+        defiant: ["i'm not done yet!", "you'll have to do better than that.", "still standing.", "not today.", "still here.", "come on then!", "not going down easy.", "is that it? i've had worse.", "i've got food and i've got nerve.", "you won't take me that easy.", "one more hit, then, i dare you.", "keep swinging. so will i.", "i'm not dying to this.", "ha! barely felt it.", "come on, i'm still up!", "i've come back from worse.", "not falling here.", "still swinging."],
+        weary: ["i'm fading here.", "running low...", "need a breather, badly.", "this is wearing me down.", "running on fumes here.", "this one's taking it out of me.", "need to eat. now.", "can't keep this up.", "how many lobsters is that now?", "this is a slog.", "my arms are lead.", "one more bite of bread, please.", "i'm knackered and it's not.", "where's my health gone?", "too old for this.", "somebody take over.", "i'll rest after this. if there is an after.", "ugh. eat. swing. repeat."],
+        neutral: ["getting dicey.", "hold on now.", "careful, careful.", "that one hurt.", "that hurt.", "careful now.", "getting low.", "should eat.", "right, food time.", "that's a bit low.", "should probably eat.", "half health. hmm.", "let's not die here.", "eating up.", "keeping an eye on it.", "not great, not terrible.", "careful now, careful.", "another lobster gone."]
     },
     gather: {
-        content: ["steady work, this.", "there's something calming about it.", "bit by bit it adds up.", "honest graft.", "no rush, no fuss.", "one more and then i'll rest. maybe.", "it's simple, this. i like simple.", "the pile grows.", "there's a rhythm to it once you're going.", "peaceful, this. just me and the work."],
-        bored: ["this is dull work.", "same thing over and over.", "my mind's wandering.", "how long have i been at this?", "my hands know this by heart now.", "another one. and another.", "i could do this in my sleep. might be.", "is it home time yet?", "the excitement never stops. that's a joke."],
-        diligent: ["keep at it, keep at it.", "efficiency is everything.", "another for the pile.", "this will pay off.", "no wasted motion.", "little and often, that's the way.", "each one counts.", "steady hands, steady gains.", "work now, rest later."],
-        neutral: ["nice and steady.", "one more.", "getting there.", "getting on with it.", "chip, chip, chip.", "almost got a full load.", "not long now."]
+        content: ["steady work, this.", "there's something calming about it.", "bit by bit it adds up.", "honest graft.", "no rush, no fuss.", "one more and then i'll rest. maybe.", "it's simple, this. i like simple.", "the pile grows.", "there's a rhythm to it once you're going.", "peaceful, this. just me and the work.", "a nice pile of logs, that.", "the coal keeps coming.", "not glamorous, but it's mine.", "another log for the bank.", "the tree gives, i take. fair.", "quiet work, quiet mind.", "i like watching the pile grow.", "it's not fast, but it's certain.", "willows. lovely willows.", "nobody bothering me. bliss.", "bit of graft, bit of peace.", "this'll be a nice stack by dark."],
+        bored: ["this is dull work.", "same thing over and over.", "my mind's wandering.", "how long have i been at this?", "my hands know this by heart now.", "another one. and another.", "i could do this in my sleep. might be.", "is it home time yet?", "the excitement never stops. that's a joke.", "clink. clink. clink.", "i've counted the rocks. twice.", "if this ore had a face i'd punch it.", "every log looks the same after a while.", "riveting. absolutely riveting.", "tell me a joke, someone. anyone.", "i can feel my brain going soft.", "the tree isn't even fighting back.", "did i already do this one?", "bored. so very bored.", "somewhere out there, someone is having fun."],
+        diligent: ["keep at it, keep at it.", "efficiency is everything.", "another for the pile.", "this will pay off.", "no wasted motion.", "little and often, that's the way.", "each one counts.", "steady hands, steady gains.", "work now, rest later.", "level's coming. keep going.", "no breaks until the sack's full.", "one per swing, that's the target.", "you don't get 99 by standing about.", "count it, bank it, repeat.", "a full inventory or nothing.", "quality work, every time.", "the grind is the game.", "another notch closer.", "no chatting, working.", "hands busy, head down."],
+        neutral: ["nice and steady.", "one more.", "getting there.", "getting on with it.", "chip, chip, chip.", "almost got a full load.", "not long now.", "log. log. log.", "another ore in the bag.", "twenty-something so far.", "nearly full.", "keeping at it.", "the usual.", "and another.", "swing, chop, repeat.", "one more load, then bank.", "same as yesterday.", "ticking along."]
     },
     tired: {
-        weary: ["i'm worn out.", "could really use a rest.", "my arms are aching.", "long day, this.", "i've earned a break.", "could sleep standing up.", "everything aches.", "just five minutes. please.", "running on empty here."],
-        neutral: ["bit tired now.", "need a sit down soon.", "slowing down a touch.", "bit tired.", "need a break soon.", "flagging a little."]
+        weary: ["i'm worn out.", "could really use a rest.", "my arms are aching.", "long day, this.", "i've earned a break.", "could sleep standing up.", "everything aches.", "just five minutes. please.", "running on empty here.", "fatigue's hitting hard.", "i'd kill for a sleeping bag.", "eyes are closing on their own.", "one more swing and i'm napping.", "the bed's calling.", "fatigue at the top. lovely.", "i need a proper lie down.", "can barely lift the pick.", "if i sit down, i'm not getting up.", "my legs have gone on strike.", "should have slept an hour ago."],
+        neutral: ["bit tired now.", "need a sit down soon.", "slowing down a touch.", "bit tired.", "need a break soon.", "flagging a little.", "getting a bit tired.", "should sleep soon.", "fatigue's creeping up.", "time for the bag, i think.", "energy's going.", "not long before i need a rest.", "yawning already.", "sleep soon, i reckon.", "bit worn.", "could do with a kip.", "flagging.", "nearly done in."]
     },
     bank: {
-        greedy: ["got to keep my riches safe.", "no one's touching my stash.", "into the vault it goes.", "can't be too careful with wealth.", "can't be too careful with my fortune.", "every coin in its place.", "the vault is my happy place."],
-        practical: ["best stash this lot.", "off to the bank.", "keeping this safe.", "a quick deposit.", "don't want to lose {item}.", "stash first, then carry on.", "quick deposit and off.", "no point lugging all this about."],
-        neutral: ["a bank run it is.", "storing the goods.", "safe and sound.", "bank run.", "dropping this lot off.", "into the bank it goes."]
+        greedy: ["got to keep my riches safe.", "no one's touching my stash.", "into the vault it goes.", "can't be too careful with wealth.", "can't be too careful with my fortune.", "every coin in its place.", "the vault is my happy place.", "count it twice, then count it again.", "my {item} is nobody's business.", "gold in the bank is gold that's mine.", "one day this vault will be full.", "nobody sees my stash. nobody.", "{item} safe, heart at ease.", "the banker's the only one i trust.", "wealth is a pile you can't see.", "in it goes. out it doesn't.", "mine, mine, all mine.", "the pile grows, the smile grows."],
+        practical: ["best stash this lot.", "off to the bank.", "keeping this safe.", "a quick deposit.", "don't want to lose {item}.", "stash first, then carry on.", "quick deposit and off.", "no point lugging all this about.", "{item} in, hands free.", "no sense carrying {item} around.", "bank first, questions later.", "inventory's full, off to the bank.", "quick trip, then back to it.", "always bank before the wildy.", "one deposit and i'm sorted.", "lighter pockets, safer walk.", "keep it tidy, keep it banked.", "just dropping {item} in.", "got to make space for more.", "tidying up the inventory."],
+        neutral: ["a bank run it is.", "storing the goods.", "safe and sound.", "bank run.", "dropping this lot off.", "into the bank it goes.", "bank trip.", "depositing {item}.", "dropping this off.", "in it goes.", "off to see the banker.", "quick stop at the bank.", "banking {item}.", "space needed. bank time.", "bank, then carry on.", "clearing the bag.", "time for a deposit.", "over to the bank."]
     },
     shop: {
-        greedy: ["let's see if there's a bargain.", "i love a good deal.", "spending to make more, that's the trick.", "everything has a price."],
-        neutral: ["let's see the wares.", "a bit of shopping.", "what's in stock today?", "browsing the shelves.", "time to spend."]
+        greedy: ["let's see if there's a bargain.", "i love a good deal.", "spending to make more, that's the trick.", "everything has a price.", "hope they've something worth buying.", "a shop's just a bank with worse manners.", "don't pay full price for anything.", "let's see if they'll haggle.", "if it's cheap, i'll take the lot.", "shopkeepers love me. i don't love them.", "stock up now, sell dear later.", "coin out, coin back double.", "every shelf hides a bargain.", "the only good price is a low one.", "what's the general store got, then?", "let's fleece someone politely.", "what's cheap today?", "buy low. always buy low."],
+        neutral: ["let's see the wares.", "a bit of shopping.", "what's in stock today?", "browsing the shelves.", "time to spend.", "need a few bits.", "popping into the shop.", "time for supplies.", "what have they got in?", "restocking.", "quick shop, then back out.", "a look at the wares.", "the general store, then.", "just need some runes.", "just need some food.", "let's see the prices.", "shopping, briefly.", "grabbing supplies."]
     },
     sell: {
-        greedy: ["{item} is worth a fortune.", "cha-ching.", "coin in my pocket.", "someone will pay well for {item}.", "a merchant's work is never done."],
-        pleased: ["{item} fetched a fair price.", "a tidy little profit.", "turning {item} into gold.", "off it goes for coin."],
-        neutral: ["cash for this lot.", "selling up.", "clearing out {item}."]
+        greedy: ["{item} is worth a fortune.", "cha-ching.", "coin in my pocket.", "someone will pay well for {item}.", "a merchant's work is never done.", "{item} for gold. lovely.", "the coin's the point.", "another sale, another smile.", "watch the gold roll in.", "someone always wants {item}.", "buying gf with this, probably. joke.", "sold. next.", "they'll pay. they always pay.", "{item} was only ever gold in disguise.", "sell, sell, sell.", "coin's the only loot that matters.", "every {item} has a buyer.", "gold today, more tomorrow."],
+        pleased: ["{item} fetched a fair price.", "a tidy little profit.", "turning {item} into gold.", "off it goes for coin.", "not a bad price for {item}.", "that went nicely.", "gold in, {item} out. tidy.", "a decent trade, that.", "cheerful little sale.", "more than i expected for {item}.", "that'll do nicely.", "sold, and no complaints.", "worth the walk to sell that.", "happy with that.", "pockets a bit heavier now.", "lovely, that's the {item} gone.", "fair coin for fair goods.", "profit's profit."],
+        neutral: ["cash for this lot.", "selling up.", "clearing out {item}.", "selling {item}.", "shifting the {item}.", "coin for {item}.", "off it goes.", "time to sell.", "getting rid of {item}.", "sold.", "clearing the bag for coin.", "trading in {item}.", "a quick sale.", "the {item} needs to go.", "let's see what they'll give.", "selling up the lot.", "{item}, sold.", "done. that's the {item} gone."]
     },
     rich: {
-        greedy: ["look at all this gold!", "rich, i tell you, rich!", "money is power.", "the coffers runneth over.", "never enough, but a fine start."],
-        pleased: ["i'm doing rather well.", "a healthy purse, this.", "the savings are growing.", "comfortable at last."],
-        neutral: ["got a fair bit saved now.", "the gold's adding up."]
+        greedy: ["look at all this gold!", "rich, i tell you, rich!", "money is power.", "the coffers runneth over.", "never enough, but a fine start.", "i could buy the whole shop.", "gold, gold, gold. beautiful.", "counting it takes hours now.", "richer than the king, near enough.", "the banker knows my name.", "nothing beats a full vault.", "and they said i'd never make it.", "more gold than sense, and proud.", "i'd bathe in it if i could.", "every coin earned. mostly.", "next stop: rune plate.", "no more bread for me. lobsters only.", "rich enough to be picky."],
+        pleased: ["i'm doing rather well.", "a healthy purse, this.", "the savings are growing.", "comfortable at last.", "gold's not a worry anymore.", "i can afford the good food now.", "took a while, but the purse is heavy.", "a nice cushion in the bank.", "no more counting pennies.", "i've done alright for myself.", "rune armour money, finally.", "steady work pays off.", "comfortably off. i'll take it.", "the bank looks healthy.", "could treat myself, actually.", "a good number in the vault.", "nice to not be skint.", "sitting pretty."],
+        neutral: ["got a fair bit saved now.", "the gold's adding up.", "got a decent stack now.", "the gold's fine.", "bank's looking alright.", "few thousand put by.", "not poor, anyway.", "enough coin to be going on with.", "savings are savings.", "money's not the problem today.", "a tidy sum.", "sitting on a fair bit.", "purse is full enough.", "the vault's filling up.", "solvent, at least.", "gold's there when i need it.", "doing alright, coin-wise.", "enough for supplies and then some."]
     },
     alch: {
-        pleased: ["magic straight into gold, lovely.", "a neat little trick, this.", "gold from thin air.", "why sell when you can alch?"],
-        neutral: ["straight to gold.", "alch and move on.", "turning {item} to coin."]
+        pleased: ["magic straight into gold, lovely.", "a neat little trick, this.", "gold from thin air.", "why sell when you can alch?", "poof. gold.", "nature runes well spent.", "{item} to coin in a flash.", "the alch life is the good life.", "no shop needed, just magic.", "magic xp and gold. can't lose.", "there goes another {item}, ding.", "lovely bit of alchemy.", "who needs a merchant.", "coins from nothing. well, from {item}.", "best spell in the book.", "gold and xp in one go.", "that's the stuff.", "cheaper than walking to a shop."],
+        neutral: ["straight to gold.", "alch and move on.", "turning {item} to coin.", "alching {item}.", "high alch, then.", "another one gone to gold.", "one nature rune. one {item}. coin.", "alch, alch, alch.", "{item} goes poof.", "magic to gold.", "casting on the {item}.", "turning junk to coin.", "gold, in a puff.", "another {item} alched.", "runes spent, gold made.", "alching the {item}.", "fire rune, nature rune, gold.", "back to alching."]
     },
     explore: {
-        wistful: ["i wonder what's out there.", "so much world, so little time.", "the horizon calls to me.", "there's always somewhere new.", "wonder what's over that hill.", "every road leads somewhere new.", "i could walk forever, some days.", "never seen this part before."],
-        eager: ["i've never been {place}!", "adventure calls!", "let's see what's over the hill.", "somewhere new today, exciting.", "let's see what's out here!", "new ground! love it.", "somewhere i've never been. brilliant.", "adventure's this way, i can feel it."],
-        neutral: ["let's have a look {place}.", "the world's a big place.", "off exploring then.", "just having a look around.", "wandering, mostly.", "seeing the sights.", "this way, i think."]
+        wistful: ["i wonder what's out there.", "so much world, so little time.", "the horizon calls to me.", "there's always somewhere new.", "wonder what's over that hill.", "every road leads somewhere new.", "i could walk forever, some days.", "never seen this part before.", "wonder who walked {place} before me.", "the map's bigger than they say.", "i keep finding corners i never knew.", "there's always a road i haven't taken.", "somewhere {place} there's something i've missed.", "one day i'll see all of it.", "the sea, karamja, all of it. someday.", "you forget how big it all is.", "every hill hides another hill.", "i wonder what the far side's like.", "roads go on longer than legs do.", "the world's quiet {place}. i like it."],
+        eager: ["i've never been {place}!", "adventure calls!", "let's see what's over the hill.", "somewhere new today, exciting.", "let's see what's out here!", "new ground! love it.", "somewhere i've never been. brilliant.", "adventure's this way, i can feel it.", "what's {place}, then? let's find out.", "a new corner! off i go.", "never been {place}. that changes now.", "let's see what {place} has got.", "maps are for people who don't wander.", "there's always something past the next tree.", "onward, into the unknown!", "new roads, new trouble. lovely.", "wonder what's lurking {place}.", "i'll be the first of us {place}, watch.", "come on, legs, somewhere new!", "the horizon it is."],
+        neutral: ["let's have a look {place}.", "the world's a big place.", "off exploring then.", "just having a look around.", "wandering, mostly.", "seeing the sights.", "this way, i think.", "having a wander {place}.", "just looking around {place}.", "let's see what's {place}.", "poking about.", "never been {place}, may as well.", "exploring, i suppose.", "seeing what's what {place}.", "a walk {place}, why not.", "nowhere in particular.", "checking the lay of the land.", "just following the road.", "let's see where this goes.", "having a nose about."]
     },
     travel: {
-        weary: ["a long road ahead.", "my feet are doing all the work today.", "miles to go yet.", "these journeys take it out of me.", "long way, this.", "my legs are done in.", "are we nearly there?", "one foot in front of the other."],
-        neutral: ["on the move again.", "best get walking.", "off we go.", "the road it is.", "on the road again.", "not far now.", "heading over.", "just passing through."]
+        weary: ["a long road ahead.", "my feet are doing all the work today.", "miles to go yet.", "these journeys take it out of me.", "long way, this.", "my legs are done in.", "are we nearly there?", "one foot in front of the other.", "should have bought a sleeping bag.", "walk, walk, walk. that's the game.", "i'd give a rune scimmy for a teleport.", "the road never ends, does it.", "one more mile. always one more.", "feet hurt, bag's heavy, mood's low.", "long walk to varrock, this.", "fatigue and a long road. wonderful.", "half the game is walking, i swear.", "these boots weren't made for this.", "still walking. still.", "i've walked this road too many times."],
+        neutral: ["on the move again.", "best get walking.", "off we go.", "the road it is.", "on the road again.", "not far now.", "heading over.", "just passing through.", "walking it, then.", "long way round, but fine.", "on the road.", "off to the next spot.", "quick walk over.", "moving along.", "en route.", "shouldn't be long.", "the road's quiet today.", "over the hill and on.", "heading that way.", "just walking."]
     },
     levelUp: {
-        proud: ["level up! knew i had it in me.", "stronger by the day.", "all that work paid off.", "one step closer to the top.", "another level! told you i'd get there.", "stronger every day. look out, world.", "that's a milestone, that is.", "all that work, paying off.", "the grind was worth it."],
-        pleased: ["another level, nice.", "feel the difference already.", "progress!", "onward and upward.", "oh, a level! lovely.", "well that's made my day.", "up we go! feels good.", "didn't even notice i was close. brilliant.", "ding! as they say."],
-        neutral: ["level up.", "getting there, slowly.", "another step.", "onwards and upwards.", "good, that's done."]
+        proud: ["level up! knew i had it in me.", "stronger by the day.", "all that work paid off.", "one step closer to the top.", "another level! told you i'd get there.", "stronger every day. look out, world.", "that's a milestone, that is.", "all that work, paying off.", "the grind was worth it.", "another level. the grind knows my name.", "look at that. look at it.", "99 by winter, mark me.", "on the way to the top, slowly.", "that's what work looks like.", "another one in the book.", "told you i'd get there.", "the fireworks are for me, yes.", "years of coal for this. worth it.", "and just like that, stronger.", "that level was mine and i took it.", "look who just levelled. me.", "all those willows paid off."],
+        pleased: ["another level, nice.", "feel the difference already.", "progress!", "onward and upward.", "oh, a level! lovely.", "well that's made my day.", "up we go! feels good.", "didn't even notice i was close. brilliant.", "ding! as they say.", "oh nice, a level.", "that's a good feeling.", "lovely, that.", "little wins.", "and up we go.", "one more level for the tally.", "level! grand.", "wasn't expecting that so soon.", "cheerful little ding.", "happy with that.", "another one. lovely.", "progress feels good.", "a level a day keeps the boredom away."],
+        neutral: ["level up.", "getting there, slowly.", "another step.", "onwards and upwards.", "good, that's done.", "a level.", "levelled.", "on to the next one.", "that's another.", "one more up.", "level gained.", "and there it is.", "about time.", "right. next level.", "another level in.", "one closer.", "levelled up, then.", "it goes up."]
     },
     pvp: {
-        menacing: ["you shouldn't have come {place}.", "this is my wilderness.", "nowhere to run now.", "you picked the wrong day."],
-        aggressive: ["fresh meat.", "time to PK.", "hand over your loot.", "you're mine."],
-        neutral: ["a target, out here.", "someone to fight."]
+        menacing: ["you shouldn't have come {place}.", "this is my wilderness.", "nowhere to run now.", "you picked the wrong day.", "i've been waiting for someone like you.", "welcome to the wild.", "your rune's mine.", "you look lost. let me help.", "nobody hears you {place}.", "should've stayed in lumbridge.", "the wildy always collects.", "i'll be gentle. no i won't.", "hope you banked.", "you walked into my house.", "nice gear. was.", "a skull suits me.", "run, and i'll still catch you.", "you're a long way from safe."],
+        aggressive: ["fresh meat.", "time to PK.", "hand over your loot.", "you're mine.", "you're loot to me!", "there's one! attack!", "PK time!", "i'll take the lot!", "i'll have that armour!", "no running!", "you're mine, {place}!", "fight me or drop!", "let's have it!", "swing first, cry later!", "on you!", "found one!", "i smell rune!", "another one for the skull!"],
+        neutral: ["a target, out here.", "someone to fight.", "someone's {place}.", "a fight, then.", "here's a target.", "another player {place}.", "let's see what they've got.", "got one in sight.", "time to test them.", "wildy business.", "a player, alone. handy.", "engaging.", "found someone {place}.", "let's go then.", "target spotted.", "into the fray.", "someone's about.", "right, a fight."]
     },
     pvpWin: {
-        cocky: ["should've stayed home.", "easy loot.", "you were never a threat.", "another skull for the collection."],
-        greedy: ["all mine now.", "thanks for the drop.", "your loss, my gain.", "loot is loot."],
-        neutral: ["that's a wilderness kill.", "down they go."]
+        cocky: ["should've stayed home.", "easy loot.", "you were never a threat.", "another skull for the collection.", "thanks for the rune.", "another one runs home to lumbridge.", "sorry about your gear. not really.", "that's what the skull's for.", "next time bring friends. more loot.", "they always come back. i always win.", "another day, another free set.", "should have prayed.", "i'll wear that better than you did.", "tell your mates what happened.", "you'll respawn. your armour won't.", "gg, as they say.", "and the wild claims another.", "not even close."],
+        greedy: ["all mine now.", "thanks for the drop.", "your loss, my gain.", "loot is loot.", "what did they drop? let's see.", "loot, loot, loot.", "ooh, rune.", "worth the walk out here.", "that's a profitable death.", "all of it. in the bag.", "free gear is the best gear.", "their loss, my bank.", "hope it was expensive.", "lovely drop, that.", "gold, gear, done.", "cha-ching in the wilderness.", "the wildy provides.", "pick it all up, every bit."],
+        neutral: ["that's a wilderness kill.", "down they go.", "kill.", "that's one.", "picking up what's left.", "they're down.", "another for the wild.", "back to lumbridge for them.", "right, loot and go.", "they lost that one.", "and down.", "wilderness does what it does.", "done there.", "next one.", "one down out here.", "grab the drop and move.", "that's them sorted.", "well. that happened."]
     },
     pvpFlee: {
-        panicked: ["not today, not today!", "i'm off, i'm off!", "run, run, run!", "every man for himself!"],
-        defiant: ["i'll be back for you.", "you win this round.", "count yourself lucky.", "next time is mine."],
-        neutral: ["time to retreat.", "out of here."]
+        panicked: ["not today, not today!", "i'm off, i'm off!", "run, run, run!", "every man for himself!", "not the rune, not the rune!", "logging! no, running!", "help! anyone!", "legs, don't fail me!", "i knew i shouldn't have come!", "too many! too many!", "run for the ditch!", "no no no no!", "get me out of here!", "i've got no food!", "nope, gone, bye!", "why did i bring my good stuff!", "run! run!", "this was a mistake!"],
+        defiant: ["i'll be back for you.", "you win this round.", "count yourself lucky.", "next time is mine.", "living to fight another day.", "you got lucky, that's all.", "i'll remember your name.", "not running. tactically leaving.", "this isn't over.", "enjoy it while it lasts.", "next time i'll have food.", "you haven't beaten me. yet.", "retreat's not defeat.", "i'll be back with friends.", "keep the kill. i'll keep my gear.", "call it a draw.", "you'll see me again.", "cheap shot. we'll see."],
+        neutral: ["time to retreat.", "out of here.", "leaving.", "not worth it.", "back to safety.", "off, then.", "heading for the border.", "no thanks.", "bailing.", "getting clear.", "out of range, please.", "that's my cue.", "walking away from that one.", "time to go.", "out.", "not sticking around.", "off this way.", "nope."]
     },
     taunt: {
-        menacing: ["you again, {name}. watch yourself.", "i haven't forgotten, {name}.", "you've got some nerve showing up, {name}.", "we've unfinished business, {name}."],
-        cocky: ["come back for more, {name}?", "remember how last time went, {name}?", "still sore about our last meeting, {name}?"],
-        bitter: ["i'm still cross with you, {name}.", "you owe me, {name}.", "i don't forget a slight, {name}."]
+        menacing: ["you again, {name}. watch yourself.", "i haven't forgotten, {name}.", "you've got some nerve showing up, {name}.", "we've unfinished business, {name}.", "still walking about, {name}? brave.", "don't think i've forgiven you, {name}.", "the wild's a small place, {name}.", "sleep with one eye open, {name}.", "you and me aren't finished, {name}.", "keep looking over your shoulder, {name}.", "i'll be seeing you, {name}.", "you know what you did, {name}.", "next time there's no running, {name}.", "i've a long memory, {name}.", "enjoy your gear while you have it, {name}.", "careful where you walk, {name}.", "someone's got a debt to pay, {name}.", "not forgotten, {name}. not forgiven."],
+        cocky: ["come back for more, {name}?", "remember how last time went, {name}?", "still sore about our last meeting, {name}?", "back for another lesson, {name}?", "did you learn nothing last time, {name}?", "still got that bruise, {name}?", "look who's not dead yet. hi {name}.", "you again, {name}? this'll be quick.", "here to lose again, {name}?", "nice armour, {name}. shame about you.", "you should be better at this by now, {name}.", "hello, {name}. still rubbish, i take it?", "oh good, {name}. an easy one.", "wondered when you'd show up, {name}.", "you never learn, {name}, do you.", "want a rematch, {name}? no, didn't think so.", "how's the pride, {name}? still sore?", "{name}. it's like the tutorial all over again."],
+        bitter: ["i'm still cross with you, {name}.", "you owe me, {name}.", "i don't forget a slight, {name}.", "you've a nerve, {name}.", "some of us remember, {name}.", "no, i'm not over it, {name}.", "you cost me, {name}.", "don't talk to me, {name}.", "the cheek of you, {name}.", "you know what you owe, {name}.", "i'll not shake your hand, {name}.", "what you did was low, {name}.", "some things don't wash off, {name}.", "keep walking, {name}.", "you're no friend of mine, {name}.", "every time i see you, {name}, it comes back.", "i haven't forgotten, {name}. i tried.", "you'll get no smile from me, {name}."]
     },
     greet: {
-        warm: ["hello there, lovely day.", "good to see a face about.", "well met, friend.", "always nice to have company.", "hello there, {name}! lovely to see a friendly face.", "well met, {name}. how's the road treating you?", "hey {name}! didn't expect company out here.", "{name}! good timing, i was getting bored of my own thoughts.", "oh, hello! mind if i say hi? hi.", "afternoon, {name}. or morning. i lose track out here.", "there you are, {name}. all good?", "hello hello! {name}, isn't it?"],
-        gruff: ["hello, then.", "you again.", "afternoon.", "don't mind me.", "{name}.", "hm. hello.", "yes, hello, i see you.", "what do you want, {name}?", "hello, i suppose.", "keep it short, {name}, i'm busy."],
-        neutral: ["hello there.", "good day to you.", "alright?", "morning.", "hello, {name}.", "hi there.", "greetings, {name}.", "hello. {name}, right?", "hey.", "good day, {name}.", "alright, {name}?"],
-        cheerful: ["hiya {name}! what a day for it.", "hey hey! how's it going, {name}?", "look who it is! hello {name}!", "hello! grand to see you, {name}.", "ooh, company! hi {name}."]
+        warm: ["hello there, lovely day.", "good to see a face about.", "well met, friend.", "always nice to have company.", "hello there, {name}! lovely to see a friendly face.", "well met, {name}. how's the road treating you?", "hey {name}! didn't expect company out here.", "{name}! good timing, i was getting bored of my own thoughts.", "oh, hello! mind if i say hi? hi.", "afternoon, {name}. or morning. i lose track out here.", "there you are, {name}. all good?", "hello hello! {name}, isn't it?", "hello {name}, mind the cows.", "well, hello. you've walked far?", "hello, {name}. nice day for it.", "oh good, someone to talk to. hi {name}.", "hello there. you're a welcome sight, {name}.", "hi {name}. how's the world treating you?", "a friendly face! hello, {name}.", "hello {name}. been a quiet morning till now.", "good to see you about, {name}.", "hi there, {name}. all well?", "hello! come far, {name}?", "well hello, {name}. lovely timing.", "hello, {name}, and how are we today?", "hi {name}! good to bump into you.", "hey {name}, you're looking well.", "hello there, stranger. {name}, is it?", "hello {name}. glad it's you and not a goblin.", "hi, {name}. nice to see a person for once.", "hello! good to have you here, {name}.", "hey {name}. how goes it?"],
+        gruff: ["hello, then.", "you again.", "afternoon.", "don't mind me.", "{name}.", "hm. hello.", "yes, hello, i see you.", "what do you want, {name}?", "hello, i suppose.", "keep it short, {name}, i'm busy.", "oh. it's you.", "hm. {name}.", "morning, or whatever it is.", "yeah, hi.", "hello. don't stay long.", "you're in my light, {name}.", "alright. what.", "mm. {name}.", "hello, hello. get on with it.", "don't need a chat, but hello.", "yes, i see you, {name}.", "hi. busy.", "hello. that's your lot.", "oh, {name}. fine. hello.", "hm. afternoon, {name}.", "hello, briefly."],
+        neutral: ["hello there.", "good day to you.", "alright?", "morning.", "hello, {name}.", "hi there.", "greetings, {name}.", "hello. {name}, right?", "hey.", "good day, {name}.", "alright, {name}?", "afternoon, {name}.", "hi, {name}.", "hello there, {name}.", "you alright, {name}?", "how do.", "hello. how's things?", "hey there.", "greetings.", "alright there.", "hi. how's it going?", "hello. all well?", "morning, {name}.", "evening.", "hello, you.", "hi, how are you?", "hello and good day.", "hello, hello."],
+        cheerful: ["hiya {name}! what a day for it.", "hey hey! how's it going, {name}?", "look who it is! hello {name}!", "hello! grand to see you, {name}.", "ooh, company! hi {name}.", "hello hello! {name}, good to see you!", "{name}! nice one, hi!", "hiya! grand to see you.", "oh hi, {name}! lovely day, this.", "hey {name}! how's tricks?", "hello! you look cheerful, {name}.", "hi {name}! what a morning.", "afternoon, {name}! all good?", "well, hello there {name}! good timing.", "hey! it's {name}! brilliant.", "hiya {name}, you well?", "hello, {name}! what a lovely surprise.", "morning, {name}! bright and early.", "hi! good to see you, {name}!", "{name}! fancy seeing you here!", "hey hey {name}! lovely stuff.", "hello, sunshine. {name}, isn't it?"]
     },
     greetFriend: {
-        warm: ["{name}! so good to see you.", "ah, {name}, my friend, how goes it?", "{name}! it's been far too long.", "there's my favourite face, {name}!", "{name}! my favourite person. how are you?", "there's my mate {name}! good to see you.", "{name}, you old rogue. where've you been hiding?", "ah, {name}. the day just got better.", "hello, friend. missed you around here.", "{name}! come here, tell me everything."],
-        cheerful: ["{name}! what a nice surprise.", "if it isn't {name}!", "good to see you, {name}.", "{name}, you old rascal!", "{name}!! about time you showed up.", "oi oi, {name}! what's new?", "the legend returns! hello {name}!", "hello {name}, you star. what's the plan today?"],
-        neutral: ["hey, {name}.", "well met, {name}.", "{name}, good to see you.", "good to see you, {name}.", "hello again, {name}.", "{name}, hello. been a while.", "there you are, {name}."]
+        warm: ["{name}! so good to see you.", "ah, {name}, my friend, how goes it?", "{name}! it's been far too long.", "there's my favourite face, {name}!", "{name}! my favourite person. how are you?", "there's my mate {name}! good to see you.", "{name}, you old rogue. where've you been hiding?", "ah, {name}. the day just got better.", "hello, friend. missed you around here.", "{name}! come here, tell me everything.", "{name}! thought you'd fallen in a hole.", "there you are, {name}. i was starting to worry.", "{name}, my old mate. how've you been?", "ah, {name}. now the day's worth something.", "{name}! give us a hug. no? a nod, then.", "is that {name}? it is! hello!", "good to see you in one piece, {name}.", "{name}! i've a story for you later.", "hello again, {name}. you're looking well.", "{name}, you're a sight for sore eyes.", "{name}! still alive then. good.", "always a good day when i see {name}.", "hi {name}. i was just thinking about you.", "{name}, you old sod. good to see you.", "my friend {name}! where've you been?", "{name}! sit down, tell me things.", "ah, {name}. missed you, if i'm honest.", "you're back, {name}! brilliant."],
+        cheerful: ["{name}! what a nice surprise.", "if it isn't {name}!", "good to see you, {name}.", "{name}, you old rascal!", "{name}!! about time you showed up.", "oi oi, {name}! what's new?", "the legend returns! hello {name}!", "hello {name}, you star. what's the plan today?", "well well well, {name}!", "ha! {name}! hello!", "look what the cat dragged in! hi {name}!", "{name}! the day just got better!", "{name}, you legend!", "here comes trouble! hi {name}.", "{name}! get in!", "the one and only {name}! hello!", "yes! {name}! how are you?", "{name}!! finally!", "hello you! {name}!", "big smile for {name}!", "well look who it is, it's {name}!", "haha, {name}! knew you'd turn up.", "top of the morning, {name}!", "{name}! what have you been up to, eh?"],
+        neutral: ["hey, {name}.", "well met, {name}.", "{name}, good to see you.", "good to see you, {name}.", "hello again, {name}.", "{name}, hello. been a while.", "there you are, {name}.", "hi {name}. good to see you.", "{name}. alright?", "hey {name}, been a while.", "there's {name}. hello.", "afternoon, {name}.", "hello, {name}. well?", "{name}. been keeping busy?", "back again, {name}?", "hello there, {name}. all well?", "good to see you about, {name}.", "hey. {name}. how's things?", "long time, {name}.", "hi {name}, you well?", "{name}, hi. how's the road?", "hello {name}, nice to see you."]
     },
     admire: {
-        earnest: ["one day i'll be as good as you, {name}.", "teach me your ways, {name}!", "you're an inspiration, {name}.", "i can only dream of your skill, {name}.", "you're really something, {name}.", "i want to be like you when i grow up. sort of.", "how do you make it look so easy?"],
-        humble: ["nice gear, {name}, wish i had the same.", "you make it look easy, {name}.", "how'd you get so strong, {name}?", "i've a lot to learn from you, {name}.", "i'll never be that good.", "you make the rest of us look slow."],
-        neutral: ["impressive work, {name}.", "you're the real deal, {name}.", "nice work, {name}.", "impressive.", "well done, that."]
+        earnest: ["one day i'll be as good as you, {name}.", "teach me your ways, {name}!", "you're an inspiration, {name}.", "i can only dream of your skill, {name}.", "you're really something, {name}.", "i want to be like you when i grow up. sort of.", "how do you make it look so easy?", "i'd give anything to fight like you, {name}.", "how did you get that level, {name}?", "you're what i want to be, {name}.", "you're a proper hero, {name}.", "i tell people about you, {name}.", "you make this look like walking.", "someday i'll be half as good as you.", "it's an honour, {name}, honestly.", "i've been watching you work. incredible.", "you've got the touch, {name}.", "how do you do it, {name}?", "i'm taking notes, {name}.", "can i just say, {name}, wow.", "you're brilliant, {name}. i mean it.", "seeing you fight is a lesson in itself.", "that's the kind of player i want to be.", "proper impressed, {name}."],
+        humble: ["nice gear, {name}, wish i had the same.", "you make it look easy, {name}.", "how'd you get so strong, {name}?", "i've a lot to learn from you, {name}.", "i'll never be that good.", "you make the rest of us look slow.", "i'd not last a minute against you, {name}.", "you've clearly put the hours in, {name}.", "next to you i'm still a lumbridge newbie.", "that's real skill, {name}. i'm miles off.", "you've got years on me, {name}.", "wish i had your patience, {name}.", "i'm still using bronze, and look at you.", "you'd wipe the floor with me.", "one day, maybe. you're the one to catch.", "my levels look sad next to yours, {name}.", "i've a long way to go, watching you.", "credit where it's due, {name}.", "you're way ahead of me, {name}.", "there's no catching you, {name}.", "you make it look effortless. it isn't.", "not sure i'll ever get there, {name}."],
+        neutral: ["impressive work, {name}.", "you're the real deal, {name}.", "nice work, {name}.", "impressive.", "well done, that.", "solid work, {name}.", "you know what you're doing, {name}.", "good levels, those.", "nice gear, {name}.", "that's a proper set-up.", "fair play, {name}.", "you've done well for yourself.", "respect, {name}.", "you're good at this.", "that's skill, that is.", "well played, {name}.", "you've earned those levels.", "nice one, {name}. seriously.", "good going, {name}.", "you're no beginner, that's clear."]
     },
     companion: {
-        warm: ["mind if i tag along?", "good company makes the day.", "we should stick together.", "nice to share the road.", "hang in there, {name}. i've got you.", "eat something, {name}, you look pale.", "stay close, we'll get through this.", "i'm right here. breathe."],
-        cheerful: ["this is fun, isn't it?", "good spot this, {place}.", "we make a decent team.", "let's do this together.", "you've got this, {name}!", "come on, nearly there!", "we don't quit, {name}!"],
-        neutral: ["room for one more?", "heading the same way?", "careful, {name}.", "you alright?", "need a hand?", "watch yourself."]
+        warm: ["mind if i tag along?", "good company makes the day.", "we should stick together.", "nice to share the road.", "hang in there, {name}. i've got you.", "eat something, {name}, you look pale.", "stay close, we'll get through this.", "i'm right here. breathe.", "glad you're here, {name}.", "keep your food up, {name}.", "we'll be alright, {name}.", "you good, {name}? shout if not.", "nice having you along, {name}.", "you and me against the world, {name}.", "don't worry, i've got your back.", "rest a second if you need, {name}.", "you look tired, {name}. take it easy.", "i'll watch the flank, {name}.", "steady on, we're doing fine.", "eat up, {name}. no heroics.", "you're doing well, {name}.", "we'll get there together.", "i'm not going anywhere, {name}.", "nearly done, {name}. hang on.", "you alright there, {name}? i'm here.", "we've got this, you and me."],
+        cheerful: ["this is fun, isn't it?", "good spot this, {place}.", "we make a decent team.", "let's do this together.", "you've got this, {name}!", "come on, nearly there!", "we don't quit, {name}!", "best partner in the game, {name}!", "us two? unstoppable.", "look at us go!", "this is what it's about, {name}!", "top team, this.", "we're smashing it, {name}!", "the dream team rides again!", "good laugh, this, {name}.", "what a duo!", "you and me, {name}, we're alright.", "ha, look at that! nice one!", "we're a proper team now.", "love a bit of company on the road.", "we're doing great, {name}!", "this is going swimmingly.", "onward, partner!", "grand day for a wander with a mate."],
+        neutral: ["room for one more?", "heading the same way?", "careful, {name}.", "you alright?", "need a hand?", "watch yourself.", "you good, {name}?", "eat if you need, {name}.", "keeping pace?", "all good this side.", "how's your food, {name}?", "let's keep together.", "not far now, {name}.", "you take that one, i'll take this.", "watch your health.", "still with me, {name}?", "steady on.", "we alright?", "i've got this side.", "same way, then.", "how's your health, {name}?", "on we go."]
     },
     tradeOpen: {
-        greedy: ["got anything worth my coin?", "let's talk business.", "i drive a hard bargain, mind.", "show me what you've got."],
-        neutral: ["fancy a trade?", "want to swap something?", "anything you need?", "let's deal."]
+        greedy: ["got anything worth my coin?", "let's talk business.", "i drive a hard bargain, mind.", "show me what you've got.", "no freebies, mind.", "i've a good eye for a rip-off.", "make me an offer, a good one.", "let's see what's worth my time.", "i buy low, i sell high. nothing personal.", "got gold? then let's talk.", "i don't do charity.", "cough up something decent.", "what's on the table, then?", "a fair trade's one where i win.", "let's see the goods.", "make it worth my while.", "everything's negotiable. mostly my way.", "what've you got that i want?"],
+        neutral: ["fancy a trade?", "want to swap something?", "anything you need?", "let's deal.", "up for a trade?", "got anything to swap?", "care to trade?", "trading, if you're keen.", "let's see if we can deal.", "want to trade something?", "open to a swap.", "what have you got?", "trade? if you fancy.", "let's have a look at each other's bits.", "i've a few things to trade.", "any deals going?", "could trade, if you like.", "shall we trade?"]
     },
     tradeThanks: {
-        warm: ["a real pleasure doing business.", "thanks kindly, friend!", "we should trade again sometime.", "always good dealing with you."],
-        pleased: ["a fair swap, that.", "nice trade!", "cheers for that.", "we both did well there."],
-        neutral: ["good deal.", "trade done.", "thanks."]
+        warm: ["a real pleasure doing business.", "thanks kindly, friend!", "we should trade again sometime.", "always good dealing with you.", "lovely doing business with you.", "cheers, that was easy.", "good trade, good person.", "thanks, friend. good luck out there.", "pleasure, as always.", "that's how it should be done.", "much obliged.", "you're a good sort to trade with.", "thanks a lot. take care.", "top trade, that. cheers.", "nice one, that helped me out.", "glad we could sort that.", "thanks kindly.", "till next time, and thanks."],
+        pleased: ["a fair swap, that.", "nice trade!", "cheers for that.", "we both did well there.", "happy with that.", "both of us walk away smiling.", "good bit of business.", "sorted. nice.", "that worked out well.", "tidy trade.", "good, that's what i needed.", "fair's fair. cheers.", "nice, thanks for that.", "worked out nicely.", "just what i was after.", "good deal all round.", "spot on. thanks.", "cheers, sorted."],
+        neutral: ["good deal.", "trade done.", "thanks.", "cheers.", "done.", "that's that.", "thanks for the trade.", "ta.", "sorted.", "good one.", "fair enough. thanks.", "deal done.", "right, cheers.", "thank you.", "all good.", "trade complete.", "appreciated.", "that's fine."]
     },
     tradeReject: {
-        gruff: ["no deal.", "not a chance.", "keep your junk.", "you're wasting my time."],
-        polite: ["no thanks, not for me.", "i'll pass on that one.", "sorry, that won't work for me.", "i'll hold onto my things, thanks."],
-        greedy: ["that's not nearly enough.", "you insult me with that offer.", "come back when you're serious."]
+        gruff: ["no deal.", "not a chance.", "keep your junk.", "you're wasting my time.", "no.", "not for that.", "you're having a laugh.", "not interested.", "take it elsewhere.", "not today.", "nope.", "don't waste my time.", "no thanks. move on.", "not that. not ever.", "put it away.", "i've seen better in a chicken pen.", "not happening.", "you're joking, surely."],
+        polite: ["no thanks, not for me.", "i'll pass on that one.", "sorry, that won't work for me.", "i'll hold onto my things, thanks.", "not quite what i need, sorry.", "thanks, but i'll leave it.", "i'll say no this time.", "kind offer, but no.", "not for me, thank you.", "afraid not, sorry.", "maybe another time.", "i'll have to decline.", "no thank you, honestly.", "that's not one for me.", "appreciate it, but no.", "sorry, i'll pass.", "not today, thanks.", "thanks anyway."],
+        greedy: ["that's not nearly enough.", "you insult me with that offer.", "come back when you're serious.", "double it and we'll talk.", "you call that an offer?", "i'd lose money on that.", "not even close.", "you'll have to do better.", "that's robbery, and not the good kind.", "no. more.", "my time's worth more than that.", "come back with real coin.", "i wasn't born yesterday.", "insulting. next.", "that's a joke offer.", "try again with gold.", "not for that pittance.", "you're miles off."]
     },
     idle: {
-        content: ["nice day for it.", "a fine moment, this.", "life's good.", "no complaints here.", "nice to stand still for a minute.", "no rush today.", "just enjoying the view.", "peace and quiet. lovely.", "a moment to breathe."],
-        bored: ["nothing much happening.", "i'm a bit restless.", "what to do, what to do.", "could use some excitement.", "so bored i could count blades of grass.", "nothing ever happens here.", "someone give me something to do.", "i've watched this same spot for ages.", "bored. bored, bored, bored."],
-        neutral: ["just passing the time.", "another day {place}.", "right then.", "hmm.", "right. what next?", "thinking about my next move.", "a little pause won't hurt.", "let's see."]
+        content: ["nice day for it.", "a fine moment, this.", "life's good.", "no complaints here.", "nice to stand still for a minute.", "no rush today.", "just enjoying the view.", "peace and quiet. lovely.", "a moment to breathe.", "the air runes can wait a minute.", "sun's out. that'll do.", "just standing about, happily.", "nowhere to be. lovely.", "a quiet moment {place}.", "not a bad life, this.", "watching the world go by.", "nice and calm today.", "no goblins, no fuss.", "i'll just stand here a bit.", "content, actually. odd feeling.", "nothing wrong with a rest.", "fine day. fine spot.", "listening to the birds, sort of.", "life's alright {place}.", "could get used to this.", "just being, for a minute."],
+        bored: ["nothing much happening.", "i'm a bit restless.", "what to do, what to do.", "could use some excitement.", "so bored i could count blades of grass.", "nothing ever happens here.", "someone give me something to do.", "i've watched this same spot for ages.", "bored. bored, bored, bored.", "i've read the same sign four times.", "tick, tock.", "there's a cow over there. that's the news.", "waiting for something to happen. anything.", "boredom, thy name is {place}.", "could go fight a chicken, i suppose.", "i've counted the fence posts.", "my legs want to go. my brain says nah.", "how do people stand about all day?", "should i bank? no. should i? no.", "yawn.", "restless, me.", "the excitement is unbearable. that's sarcasm.", "even the goblins look bored.", "could do with a quest right now.", "someone say something, anything.", "stuck for ideas here."],
+        neutral: ["just passing the time.", "another day {place}.", "right then.", "hmm.", "right. what next?", "thinking about my next move.", "a little pause won't hurt.", "let's see.", "so.", "well then.", "just standing here.", "quiet moment {place}.", "hm. what now.", "nothing on. that's fine.", "having a think.", "not doing much.", "taking five.", "let me see.", "well, here i am.", "weighing up options.", "pausing {place}.", "quick breather.", "between things, me.", "hmm, next?"]
     },
     lonely: {
-        wistful: ["quiet round here.", "could use some company.", "bit lonely {place} today.", "wish someone would stop by.", "quiet out here. too quiet, maybe.", "wouldn't mind some company, truth be told.", "talking to myself again."],
-        neutral: ["anyone about?", "all on my own again.", "just me, then.", "hello? no? okay."]
+        wistful: ["quiet round here.", "could use some company.", "bit lonely {place} today.", "wish someone would stop by.", "quiet out here. too quiet, maybe.", "wouldn't mind some company, truth be told.", "talking to myself again.", "nobody's been by in ages.", "even a goblin would be company right now.", "the silence gets loud {place}.", "wish a friend would wander past.", "alone again, naturally.", "quiet enough to hear my own thoughts. shame.", "no footsteps but mine {place}.", "where is everyone today?", "empty {place}. just me and the trees.", "not even a cow to talk to.", "could do with a face, any face.", "the world feels big when you're alone.", "someone, come and say hello. please."],
+        neutral: ["anyone about?", "all on my own again.", "just me, then.", "hello? no? okay.", "nobody about.", "just me {place}.", "quiet.", "no one here.", "alone, then.", "empty round here.", "on my own again.", "anyone? no.", "just me and the scenery.", "not a soul.", "solo, as usual.", "nobody's here.", "all quiet {place}.", "just me, apparently."]
     },
     partyCallout: {
-        cheerful: ["anyone want to team up?", "who's up for an adventure?", "party with me, it'll be fun!", "the more the merrier!", "anyone fancy teaming up?", "party going, who's in?", "looking for a crew! come on!"],
-        neutral: ["looking for a group.", "team up with me?", "LFG, who's in?", "could use a partner.", "anyone want to group up?", "party? anyone?", "could use a hand, anyone free?"]
+        cheerful: ["anyone want to team up?", "who's up for an adventure?", "party with me, it'll be fun!", "the more the merrier!", "anyone fancy teaming up?", "party going, who's in?", "looking for a crew! come on!", "let's make a party, come on!", "team up? it'll be a laugh!", "who wants an adventure with me?", "fancy a group? say yes!", "party time! who's in?", "let's go somewhere together!", "anyone want to team up? i'm fun, promise.", "a crew! let's form a crew!", "join me, we'll have a blast!", "adventure needs a party. join me!", "who's up for it? come on!", "the more the merrier, join in!", "let's do this together, anyone!"],
+        neutral: ["looking for a group.", "team up with me?", "LFG, who's in?", "could use a partner.", "anyone want to group up?", "party? anyone?", "could use a hand, anyone free?", "anyone need a party member?", "grouping up, anyone keen?", "want to team up?", "looking for people to join.", "anyone up for a group?", "party, anyone?", "could do with a team.", "anyone free to group?", "join my party if you like.", "forming a group. anyone?", "anyone want in?", "a party would help. anyone?", "team? anyone?"]
     },
     banter: {
-        up: ["great work, team!", "we're on fire!", "best crew i've run with.", "nothing can stop us!", "you lot are alright, you know.", "this party could take on anything.", "who's carrying who here, then?", "best crew on the map, easily.", "i'd follow you lot anywhere. within reason.", "remind me why we're friends? oh right, this."],
-        neutral: ["how's everyone holding up?", "sticking together, yeah?", "onward, team.", "nice one, all.", "anyone got spare food?", "how far now?", "we should bank soon.", "keep together, eh?", "what's the plan after this?", "anyone else's legs tired?"],
-        down: ["let's not get sloppy.", "stay sharp, everyone.", "this is getting tough.", "watch each other's backs.", "are we there yet.", "this is taking forever.", "i've had better days.", "someone say something cheerful, please.", "if i die, tell my mum it was heroic."]
+        up: ["great work, team!", "we're on fire!", "best crew i've run with.", "nothing can stop us!", "you lot are alright, you know.", "this party could take on anything.", "who's carrying who here, then?", "best crew on the map, easily.", "i'd follow you lot anywhere. within reason.", "remind me why we're friends? oh right, this.", "we're doing alright, aren't we?", "who needs a plan when you've got us?", "nothing beats a good crew.", "proud of this lot, honestly.", "what a team. what a day.", "we're basically legends now.", "look at us, actually surviving.", "this crew, i tell you.", "best afternoon i've had in ages.", "we're good at this, apparently.", "onward, you beautiful lot.", "i'd pick this crew every time.", "that went well! high fives all round.", "we make it look easy.", "this is the good stuff, this.", "top marks, everyone."],
+        neutral: ["how's everyone holding up?", "sticking together, yeah?", "onward, team.", "nice one, all.", "anyone got spare food?", "how far now?", "we should bank soon.", "keep together, eh?", "what's the plan after this?", "anyone else's legs tired?", "anyone need to bank?", "who's got the map?", "everyone still here?", "we alright for food?", "what's next, then?", "how's everyone for health?", "anyone need a sleep soon?", "let's keep moving.", "any lobsters spare?", "steady on, all.", "we ok to carry on?", "same plan as before?", "how's everyone doing?", "shall we push on?", "all good, everyone?", "anyone got runes left?"],
+        down: ["let's not get sloppy.", "stay sharp, everyone.", "this is getting tough.", "watch each other's backs.", "are we there yet.", "this is taking forever.", "i've had better days.", "someone say something cheerful, please.", "if i die, tell my mum it was heroic.", "this is going badly, isn't it.", "we've been here before. literally.", "morale's a bit low, this end.", "can we not die this time?", "i've lost track of the plan.", "someone eat, i can hear you wheezing.", "who chose this route?", "one of us should have brought food.", "we're not the crew we were.", "whose idea was this?", "let's just get it done.", "i've a bad feeling about this.", "tell me it gets better.", "mind the trap this time.", "we're going in circles.", "another one bites the dust. ours, usually.", "keep it together, people."]
     },
     partyLeave: {
-        warm: ["thanks for the good times, but i'm off.", "it's been fun, catch you later.", "i'll head out, take care all.", "been a pleasure, everyone. time for me to go.", "thanks for having me. off i pop.", "take care, all. see you around."],
-        gruff: ["i'm done here.", "time i went my own way.", "had enough of the group.", "i'm done. bye.", "had enough. later.", "this isn't working. i'm off."],
-        neutral: ["i'll head off on my own now.", "off to do my own thing.", "solo from here.", "leaving the party, cheers all.", "off i go. good luck.", "time to go my own way."]
+        warm: ["thanks for the good times, but i'm off.", "it's been fun, catch you later.", "i'll head out, take care all.", "been a pleasure, everyone. time for me to go.", "thanks for having me. off i pop.", "take care, all. see you around.", "cheers all, it's been grand.", "i'll leave you to it. good luck!", "lovely being part of this. off i go.", "thanks for the company, everyone.", "time for me to wander off. be safe.", "you've been great. see you soon.", "off i go, don't have too much fun.", "bye all, keep each other alive.", "take care, team. it's been a pleasure.", "i'm off, but thanks, truly.", "bye for now. safe travels, all.", "it's been a laugh. later, all."],
+        gruff: ["i'm done here.", "time i went my own way.", "had enough of the group.", "i'm done. bye.", "had enough. later.", "this isn't working. i'm off.", "right, i'm out.", "leaving.", "enough of this.", "done. going.", "i'll do better alone.", "that's me done.", "going my own way.", "i've things to do.", "later, then.", "not for me, this group.", "i'm gone.", "off. bye.", "had my fill."],
+        neutral: ["i'll head off on my own now.", "off to do my own thing.", "solo from here.", "leaving the party, cheers all.", "off i go. good luck.", "time to go my own way.", "leaving the group now.", "going solo, cheers.", "i'll head off.", "parting ways here.", "off on my own, see you.", "leaving. good luck all.", "that's me off.", "i'm heading out.", "going my own way for a bit.", "dropping out of the party.", "time to split.", "bye, all."]
     },
     // --- reactions: replies a bot gives when it hears someone ---
     reactGreetBack: {
-        warm: ["oh, hello {name}!", "hi there, {name}!", "well hello!", "hey, good to see you!", "hello yourself, {name}!", "and a good day to you, {name}.", "hi {name}! how are you keeping?", "hello! what brings you my way?", "well hello, {name}. nice to be noticed.", "hey there. you alright, {name}?", "hello, hello. friendly sort, aren't you?"],
-        cheerful: ["hey hey!", "hello, friend!", "hi!", "well met!", "hiya! lovely to meet you, {name}.", "hello {name}! grand day, isn't it?", "hey! nice one. how's things?", "ooh hello! didn't see you there, {name}."],
-        gruff: ["hm. hi.", "yeah, hello.", "afternoon.", "hm. {name}.", "hello. that it?", "alright.", "hello, hello, no need to shout."],
-        neutral: ["hello.", "hi there.", "hey.", "greetings.", "hello, {name}.", "hi.", "hello there.", "hey, {name}.", "hello. what can i do for you?", "good to meet you, {name}."]
+        warm: ["oh, hello {name}!", "hi there, {name}!", "well hello!", "hey, good to see you!", "hello yourself, {name}!", "and a good day to you, {name}.", "hi {name}! how are you keeping?", "hello! what brings you my way?", "well hello, {name}. nice to be noticed.", "hey there. you alright, {name}?", "hello, hello. friendly sort, aren't you?", "hello {name}! good to see a friendly face.", "hi {name}, how's your day?", "oh hi! good to see you, {name}.", "hello, hello! what's new, {name}?", "well met, {name}. all good with you?", "hi there! nice of you to say hello.", "hello {name}. you've made my day a bit.", "and hello to you, {name}!", "hi {name}! where've you come from?", "hello, friend. how are you keeping?", "good day, {name}! lovely to see you.", "hey {name}! nice to be greeted, that.", "hello! good timing, i was after a chat.", "hi, {name}. glad you stopped by.", "well hello there! all well, {name}?", "hello, you. how's things?", "oh, hello {name}! you alright?", "hi! nice day for a hello, isn't it?", "hello there, {name}. good to see you."],
+        cheerful: ["hey hey!", "hello, friend!", "hi!", "well met!", "hiya! lovely to meet you, {name}.", "hello {name}! grand day, isn't it?", "hey! nice one. how's things?", "ooh hello! didn't see you there, {name}.", "hiya! how's it going?", "hello! grand to see you!", "hey {name}! what a day!", "hi {name}! you well?", "hello hello! nice one!", "well hi there, {name}!", "hey! good to see you!", "hi! lovely, isn't it?", "hello, {name}! good stuff.", "hiya {name}! all good here.", "hey there, {name}! cheerful today.", "oh hello! hi! yes!", "hi hi! how's tricks, {name}?", "hello! brilliant, someone to talk to.", "hey {name}! good to hear from you.", "hello there! what a nice surprise."],
+        gruff: ["hm. hi.", "yeah, hello.", "afternoon.", "hm. {name}.", "hello. that it?", "alright.", "hello, hello, no need to shout.", "yes. hello.", "hi. that all?", "mm. hello.", "hello, {name}. what.", "yep. hi.", "hello. i'm busy, mind.", "hm. you.", "hello. don't expect a chat.", "yeah, hi, {name}.", "afternoon. or whatever.", "hi. right.", "hello, hello. what is it.", "mm. hi."],
+        neutral: ["hello.", "hi there.", "hey.", "greetings.", "hello, {name}.", "hi.", "hello there.", "hey, {name}.", "hello. what can i do for you?", "good to meet you, {name}.", "hi, {name}.", "hello. how's things?", "hey, hello.", "hello, you alright?", "hi there, {name}.", "afternoon.", "hello. what's up?", "hey there.", "hello, hello.", "hi. how are you?", "good day, {name}.", "hello, and how are you?", "hi. all well?", "hello there, {name}.", "hey. how's it going?", "morning, {name}."]
     },
     reactThanks: {
-        warm: ["you're very welcome!", "anytime, {name}!", "no trouble at all.", "my pleasure!", "any time, {name}. any time at all.", "that's what friends are for.", "don't mention it - really.", "happy to help, {name}.", "you'd do the same for me.", "my pleasure, {name}."],
-        gruff: ["yeah, sure.", "don't mention it.", "whatever.", "yeah, yeah.", "don't make a thing of it.", "fine.", "just doing what needed doing."],
-        neutral: ["no problem.", "happy to help.", "no worries.", "you're welcome, {name}.", "sure thing.", "no bother.", "glad it helped."]
+        warm: ["you're very welcome!", "anytime, {name}!", "no trouble at all.", "my pleasure!", "any time, {name}. any time at all.", "that's what friends are for.", "don't mention it - really.", "happy to help, {name}.", "you'd do the same for me.", "my pleasure, {name}.", "any time, honestly.", "you're welcome, {name}. it was nothing.", "glad i could help, {name}.", "no thanks needed, {name}.", "that's alright, {name}. happy to.", "pleasure's all mine.", "of course, {name}. always.", "don't be daft, you're welcome.", "anything for a friend, {name}.", "aw, you're welcome.", "no bother at all, {name}.", "that's what i'm here for.", "any time you need, just say.", "happy to, {name}. really."],
+        gruff: ["yeah, sure.", "don't mention it.", "whatever.", "yeah, yeah.", "don't make a thing of it.", "fine.", "just doing what needed doing.", "yeah.", "mm.", "sure.", "it was nothing. move on.", "no need.", "right.", "yep.", "didn't do it for thanks.", "hm. welcome.", "fine, fine.", "it's done, that's all."],
+        neutral: ["no problem.", "happy to help.", "no worries.", "you're welcome, {name}.", "sure thing.", "no bother.", "glad it helped.", "you're welcome.", "no trouble.", "it's fine.", "all good.", "welcome, {name}.", "not a problem.", "any time.", "that's okay.", "no worries, {name}.", "sure, no problem.", "fine by me.", "glad to.", "of course."]
     },
     reactCompliment: {
-        proud: ["i know, right?", "cheers, i've earned it.", "you're not wrong!", "took years to get this good.", "you've got a good eye, {name}.", "finally, someone notices."],
-        humble: ["oh, you're too kind.", "aw, thanks {name}.", "that means a lot.", "oh, stop it. but thank you.", "you're too kind, {name}.", "i just try my best.", "ah, i've a long way to go yet."],
-        neutral: ["thanks!", "appreciated.", "kind of you to say.", "cheers, {name}.", "thanks, that's nice of you.", "much appreciated."]
+        proud: ["i know, right?", "cheers, i've earned it.", "you're not wrong!", "took years to get this good.", "you've got a good eye, {name}.", "finally, someone notices.", "took a lot of coal to get here.", "i do try, {name}.", "well, i am rather good.", "that's what the levels are for.", "not bad, eh? not bad at all.", "i've worked for it, {name}.", "you should see me on a good day.", "years in the making, that.", "i'll take it. i've earned it.", "yes, i'm quite pleased with myself.", "flattery works on me, {name}.", "someone had to be this good.", "thanks, i know.", "you're right, of course."],
+        humble: ["oh, you're too kind.", "aw, thanks {name}.", "that means a lot.", "oh, stop it. but thank you.", "you're too kind, {name}.", "i just try my best.", "ah, i've a long way to go yet.", "oh, i'm nothing special, {name}.", "you're being kind.", "i've had help along the way.", "that's generous of you, {name}.", "anyone could do it, honestly.", "i've a long list of things i'm bad at.", "aw, thanks. not sure i deserve it.", "just luck, mostly.", "you'd do the same, {name}.", "blushing here.", "nah, i'm alright at best.", "that's very sweet of you.", "still learning, really."],
+        neutral: ["thanks!", "appreciated.", "kind of you to say.", "cheers, {name}.", "thanks, that's nice of you.", "much appreciated.", "cheers.", "ta, {name}.", "thanks very much.", "kind words.", "nice of you.", "thank you, {name}.", "that's good to hear.", "thanks, i appreciate that.", "cheers for that.", "well, thanks.", "appreciate it, {name}.", "good of you to say."]
     },
     reactInsult: {
-        aggressive: ["say that to my face.", "big words for a nobody.", "you want to go, {name}?", "you couldn't beat me on your best day.", "say that again and see what happens.", "big words from someone standing that close.", "keep talking, {name}. i dare you.", "you want a fight? you've found one."],
-        cocky: ["cute. run along.", "aw, someone's jealous.", "is that the best you've got?", "keep talking, it's adorable.", "jealous, are we?", "i've been insulted by better.", "cute. try harder.", "that the best you've got, {name}?"],
-        menacing: ["you'll regret that, {name}.", "watch your mouth.", "i won't forget that."],
-        gruff: ["whatever you say.", "get lost.", "not worth my time.", "whatever.", "go bother someone else."],
-        neutral: ["that's a bit rude.", "no need for that.", "okay then.", "charming.", "and a good day to you too.", "alright, calm down."]
+        aggressive: ["say that to my face.", "big words for a nobody.", "you want to go, {name}?", "you couldn't beat me on your best day.", "say that again and see what happens.", "big words from someone standing that close.", "keep talking, {name}. i dare you.", "you want a fight? you've found one.", "come and say that closer, {name}.", "you've picked the wrong one.", "mouth like that gets you hurt.", "want to back that up?", "one more word, {name}.", "i'll knock that smile off.", "careful, i bite.", "try me, {name}.", "you're asking for it.", "say it again, go on.", "that's fighting talk.", "you'd not say that in the wild."],
+        cocky: ["cute. run along.", "aw, someone's jealous.", "is that the best you've got?", "keep talking, it's adorable.", "jealous, are we?", "i've been insulted by better.", "cute. try harder.", "that the best you've got, {name}?", "oh no, my feelings. anyway.", "bless. did you think of that yourself?", "sorry, was that meant to hurt?", "you're funnier than you look, {name}.", "big talk, small levels.", "cute. did you practise that?", "i'll add it to the pile.", "wow. devastating. not.", "and yet, here i am, better.", "i've been called worse by chickens.", "aw. try harder next time.", "noted. and ignored."],
+        menacing: ["you'll regret that, {name}.", "watch your mouth.", "i won't forget that.", "careful, {name}.", "keep that up and see.", "i remember faces, {name}.", "you'll want to take that back.", "that was a mistake, {name}.", "you don't know who you're talking to.", "quiet now, before it's a problem.", "i'd stop there if i were you.", "you've got a big mouth, {name}.", "words have a cost, {name}.", "i'll remember this.", "don't test me, {name}.", "walk away while you can.", "the wild's a long way from safe, {name}.", "keep talking. i'm counting."],
+        gruff: ["whatever you say.", "get lost.", "not worth my time.", "whatever.", "go bother someone else.", "yeah, yeah.", "grow up.", "bore off.", "whatever, {name}.", "don't care.", "tedious.", "heard it.", "and?", "that all?", "move along.", "not listening.", "get on with it.", "no time for you."],
+        neutral: ["that's a bit rude.", "no need for that.", "okay then.", "charming.", "and a good day to you too.", "alright, calm down.", "that's uncalled for.", "right. okay.", "well that's not very nice.", "why the attitude, {name}?", "let's not, eh?", "steady on.", "hm. that's rude.", "no need, {name}.", "moving on.", "not sure what i did to earn that.", "bit much.", "alright then, {name}."]
     },
     reactHurt: {
-        panicked: ["hey, that's not nice!", "why would you say that?", "leave me alone, please.", "what did i do?", "that's... that's not fair.", "i was only trying to be friendly."],
-        neutral: ["that stings a bit.", "harsh.", "if you say so.", "that's a bit harsh, {name}.", "ouch.", "no need to be like that.", "well. okay then."]
+        panicked: ["hey, that's not nice!", "why would you say that?", "leave me alone, please.", "what did i do?", "that's... that's not fair.", "i was only trying to be friendly.", "i didn't mean any harm.", "please don't be like that.", "what's got into you, {name}?", "oh. okay. sorry.", "i'll just go, then.", "that's not fair, {name}.", "did i do something?", "i thought we were alright, {name}.", "sorry. i'm sorry.", "that really hurt, {name}.", "i don't know what i did.", "i'll leave you alone."],
+        neutral: ["that stings a bit.", "harsh.", "if you say so.", "that's a bit harsh, {name}.", "ouch.", "no need to be like that.", "well. okay then.", "right.", "noted.", "bit uncalled for, {name}.", "that's not nice.", "hm. fine.", "well then.", "i see.", "no need, {name}.", "that's unkind.", "okay, {name}.", "thanks for that."]
     },
     reactAgree: {
-        up: ["couldn't agree more!", "exactly!", "yes, totally!", "you said it!", "exactly what i was thinking!", "you're not wrong, {name}.", "couldn't agree more.", "that's it exactly."],
-        neutral: ["fair enough.", "true, that.", "aye.", "makes sense.", "fair point.", "true enough.", "i suppose so.", "can't argue with that."],
-        down: ["i suppose so.", "if you say so.", "maybe.", "yeah. sadly.", "that's how it goes.", "i know. i know.", "tell me about it."]
+        up: ["couldn't agree more!", "exactly!", "yes, totally!", "you said it!", "exactly what i was thinking!", "you're not wrong, {name}.", "couldn't agree more.", "that's it exactly.", "yes! exactly that.", "spot on, {name}.", "you've hit it there.", "my thoughts exactly.", "that's the truth, that.", "well said, {name}!", "one hundred percent.", "you're bang on.", "couldn't have put it better.", "yes yes yes.", "agreed, wholeheartedly.", "too right!", "that's what i'm saying!", "you read my mind, {name}.", "absolutely, {name}.", "hear hear!", "nailed it.", "right you are!"],
+        neutral: ["fair enough.", "true, that.", "aye.", "makes sense.", "fair point.", "true enough.", "i suppose so.", "can't argue with that.", "yeah, fair.", "true.", "i'd say so.", "agreed.", "sounds right.", "yeah, that's about it.", "can't disagree.", "that's fair, {name}.", "probably, yeah.", "you're not wrong.", "that tracks.", "fair comment.", "i'd go along with that.", "yep.", "seems right to me.", "no argument here."],
+        down: ["i suppose so.", "if you say so.", "maybe.", "yeah. sadly.", "that's how it goes.", "i know. i know.", "tell me about it.", "yeah. that's about the size of it.", "sadly true.", "you're right, worse luck.", "wish it weren't so.", "yeah. what can you do.", "true. doesn't help, though.", "i've thought the same.", "that's the way of it.", "suppose you're right, {name}.", "yeah. yeah.", "can't argue. wish i could.", "that's life out here.", "mm. you'd know.", "aye. it's grim.", "story of my life."]
     },
     reactLaugh: {
-        up: ["haha, good one!", "ha! nice.", "that's a good laugh.", "you crack me up.", "ha! good one.", "you're a laugh, {name}.", "haha, stop, my sides.", "that's the spirit!", "ha, i needed that."],
-        neutral: ["heh.", "ha, funny.", "not bad.", "ha.", "funny.", "that got a smile out of me."],
-        gruff: ["hm.", "if you say so.", "hilarious.", "very funny."]
+        up: ["haha, good one!", "ha! nice.", "that's a good laugh.", "you crack me up.", "ha! good one.", "you're a laugh, {name}.", "haha, stop, my sides.", "that's the spirit!", "ha, i needed that.", "haha! brilliant.", "ha, that's a good one, {name}.", "oh that's cracked me up.", "hahaha, no way.", "ha! where'd you get that one?", "you've a wicked sense of humour, {name}.", "ha, brilliant, that is.", "hehe, lovely.", "oh stop, i'm dying here.", "good laugh, that.", "haha, you're terrible, {name}.", "ha! comedy gold.", "that's made my day, that.", "haha, classic.", "ha, i'll steal that one.", "brilliant. absolutely brilliant.", "hahaha, priceless."],
+        neutral: ["heh.", "ha, funny.", "not bad.", "ha.", "funny.", "that got a smile out of me.", "heh, alright.", "ha. fair.", "that's amusing.", "hm, funny.", "heh, not bad, {name}.", "ha, okay.", "a chuckle, that one.", "ha. cheers for that.", "heh heh.", "quite funny.", "ha, i see.", "that's one way to put it.", "heh, true.", "amusing."],
+        gruff: ["hm.", "if you say so.", "hilarious.", "very funny.", "ha. sure.", "very droll.", "is that a joke?", "hm. funny, i suppose.", "heh. moving on.", "you should be on stage. far away.", "hilarious. truly.", "oh, my sides. no.", "ha ha. no.", "very good. anyway.", "i'll laugh later.", "mm. funny.", "a comedian, are we.", "heh. sure, {name}."]
+    },
+    // someone spoke of a third person: {name} is that person
+    reactGossip: {
+        warm: ["{name}? always been alright with me.", "i've had no bother from {name}.", "is that right? i had {name} down as decent.", "i'll keep that in mind about {name}.", "{name}'s sound, far as i've seen.", "{name}? never a cross word with them.", "i'd vouch for {name}, myself.", "{name} helped me out once. good sort.", "leave {name} be, they're alright.", "funny, i've only heard good of {name}.", "{name}'s straight with me, always.", "don't believe everything about {name}.", "{name}? solid, in my book.", "i'd trust {name} with my rune.", "{name}'s one of the good ones.", "everyone's got a story about {name}. mine's a nice one.", "give {name} a chance, they're decent.", "i like {name}. always have.", "nothing bad to say about {name}."],
+        neutral: ["never had much to do with {name}, myself.", "that so? i'll keep an eye on {name}.", "heard the same about {name}.", "can't say i know {name} well.", "{name}? seen them about, that's all.", "{name}, hm. can't say either way.", "i've heard mixed things about {name}.", "{name}? know the name, not the face.", "is that right? {name}, eh.", "i'll form my own view of {name}.", "not sure what to make of {name}.", "{name}. rings a bell.", "people say a lot about {name}.", "i'll take that with a pinch of salt.", "who knows with {name}.", "{name}'s a bit of a mystery to me.", "everyone's got an opinion on {name}.", "hm. {name}. noted.", "i'll ask {name} myself, maybe.", "i wouldn't know about {name}."],
+        gruff: ["not my business what {name} does.", "{name}'s trouble, if you ask me.", "i keep out of {name}'s way.", "{name} can look after themselves.", "don't care what {name}'s up to.", "{name}'s not my problem.", "less said about {name} the better.", "{name}? bad news, that one.", "keep me out of {name}'s business.", "{name} and i don't speak.", "wouldn't know, wouldn't care.", "if {name}'s coming, i'm going.", "{name} can rot for all i care.", "not interested in {name}.", "{name}'s a pain, that's all i know.", "spare me the gossip about {name}.", "{name}? pass.", "i've had my fill of {name}."]
+    },
+    // someone showed off a find: {item} is the thing
+    reactFind: {
+        up: ["nice find! what's that worth?", "ooh, {item}! where'd you get that?", "a {item}? jealous.", "not bad going, keep hold of that.", "{item}! that'll sell.", "look at that! a {item}!", "ooh, lucky you.", "i want one. where'd you find it?", "that's a beauty, that {item}.", "nice one! bank that quick.", "a {item}! nice bit of luck.", "cor, that'll fetch a bit.", "brilliant find!", "you jammy thing, a {item}!", "ooh, lovely. jealous, me.", "well done! keep it safe.", "that's a proper find, that.", "a {item}? that's a good day.", "wow, don't drop that.", "that's worth a fair few coins."],
+        neutral: ["a {item}, eh. worth keeping.", "what are you doing with the {item}?", "you selling the {item}?", "fair haul.", "a {item}. handy.", "{item}, nice.", "worth banking, that.", "decent.", "not bad, that {item}.", "what'll you do with it?", "keeping it or selling?", "a {item}. alright.", "handy, that.", "good find.", "that'll be useful.", "{item}? fair enough.", "someone'll want that.", "worth a bit, i'd think.", "nice, a {item}.", "that'll do."],
+        gruff: ["a {item}. seen better.", "hm. hope it was worth the walk.", "everyone's got a {item} these days.", "so?", "a {item}. and?", "got three of those.", "big deal.", "meh.", "seen plenty of those.", "hm. {item}.", "you'll lose it in the wild.", "don't wave it about.", "a {item}. right.", "lucky, i suppose.", "and i should care why?", "it's a {item}. calm down.", "the bank's that way.", "sure, nice."]
+    },
+    // someone said where they're off to
+    reactPlan: {
+        up: ["mind if i tag along?", "good shout, i might do the same.", "save me a spot!", "good luck with it, {name}!", "i was thinking the same. see you there?", "ooh, i've been meaning to go there.", "nice, have fun with that!", "good plan, {name}!", "that sounds fun, actually.", "jealous. enjoy it, {name}.", "top idea. wish i'd thought of it.", "oh nice! let me know how it goes.", "brilliant, that'll be good.", "that's a good shout, {name}.", "sounds like a good day out.", "love that idea.", "go on, {name}, you'll smash it.", "nice one! have a good one.", "i might see you there!", "good luck, {name}. sounds fun."],
+        neutral: ["fair enough, see you about.", "sounds like a plan.", "right you are.", "go on then.", "watch yourself out there.", "alright, good luck.", "makes sense.", "safe travels, then.", "fair enough, {name}.", "okay, see you later.", "sounds fine.", "mind how you go.", "right, enjoy.", "good plan.", "okay then.", "see you around, {name}.", "sure, go for it.", "that's a plan.", "off you go, then, {name}.", "alright, take care."],
+        gruff: ["off you go then.", "don't let me keep you.", "rather you than me.", "fine.", "and?", "good for you.", "have fun. or don't.", "rather you than me, {name}.", "whatever suits.", "not my business.", "sure.", "off you pop.", "mm. good luck with that.", "don't die.", "if you must.", "go on, then.", "not stopping you.", "right."]
     },
     reactQuestion: {
-        warm: ["good question! i'll help if i can.", "hmm, let me think...", "not sure, but let's find out.", "good question, {name}. not sure i know.", "hmm, let me think about that one.", "you've got me there, {name}.", "i'd love to say i know, but..."],
-        gruff: ["how should i know?", "figure it out yourself.", "not my problem.", "ask someone else.", "no idea.", "not my area."],
-        neutral: ["no idea, sorry.", "couldn't tell you.", "wish i knew.", "couldn't tell you, sorry.", "not sure, honestly.", "i don't know.", "beats me."]
+        warm: ["good question! i'll help if i can.", "hmm, let me think...", "not sure, but let's find out.", "good question, {name}. not sure i know.", "hmm, let me think about that one.", "you've got me there, {name}.", "i'd love to say i know, but...", "hmm. good one. let me think, {name}.", "you know, i'm not sure.", "ooh, tricky. i'd have to guess.", "i wish i had a better answer for you, {name}.", "that's a good question. no idea!", "let me think... nope, nothing.", "i'll ask around for you, {name}.", "not certain, but i'll help you find out.", "honestly, {name}, you've stumped me.", "i've wondered that myself.", "good question. wish i knew.", "hmm, i'd have to check.", "let me think on that.", "i'm not the best to ask, sorry, {name}.", "you know, i've no idea, but i like the question.", "that's above my level, {name}.", "hmm. someone in varrock might know."],
+        gruff: ["how should i know?", "figure it out yourself.", "not my problem.", "ask someone else.", "no idea.", "not my area.", "dunno.", "no clue.", "why ask me?", "look it up.", "not a clue, {name}.", "couldn't say.", "haven't the faintest.", "who knows.", "don't know, don't care.", "ask the banker.", "not my job to know.", "no."],
+        neutral: ["no idea, sorry.", "couldn't tell you.", "wish i knew.", "couldn't tell you, sorry.", "not sure, honestly.", "i don't know.", "beats me.", "not sure.", "couldn't say, really.", "hmm, don't know.", "no idea, {name}.", "pass.", "i'd be guessing.", "honestly, no clue.", "wish i could help.", "you've got me there.", "can't help you there, {name}.", "hmm. not sure about that.", "dunno, sorry.", "i'd have to think.", "not that i know of."]
     },
     reactTradeAsk: {
-        greedy: ["i might have something, for the right price.", "depends what you're paying.", "let's see your coin first.", "depends what you're offering.", "show me the goods first.", "trade? if the price is right."],
-        neutral: ["what are you after?", "sure, i could trade.", "show me what you've got.", "sure, what have you got?", "let's have a look.", "open a trade, then."]
+        greedy: ["i might have something, for the right price.", "depends what you're paying.", "let's see your coin first.", "depends what you're offering.", "show me the goods first.", "trade? if the price is right.", "what's in it for me?", "i don't trade for fun. gold?", "make it worth my while.", "show me coin and we'll see.", "i've got things. have you got gold?", "depends. what are you paying?", "trade, sure. i set the price.", "i'll trade, but i'll win.", "let's see your offer first.", "fine, but no bargains.", "if you've got gold, i've got goods.", "depends what's in your bag."],
+        neutral: ["what are you after?", "sure, i could trade.", "show me what you've got.", "sure, what have you got?", "let's have a look.", "open a trade, then.", "what do you need?", "sure, go on.", "alright, what for?", "could do. what've you got?", "yeah, let's trade.", "okay, what are you offering?", "sure, open it up.", "i'm listening.", "what did you have in mind?", "go on then.", "yeah, alright.", "sure. what's on offer?"]
     },
     reactPartyAsk: {
-        cheerful: ["ooh, count me in!", "i'd love to join!", "a party? yes please!", "let's team up!", "ooh, yes! invite me!", "a party? count me in!", "love to!"],
-        warm: ["i'm in, sounds fun!", "happy to join you.", "together then!", "i'd like that, {name}.", "happy to team up with you.", "sure, {name}, let's do it."],
-        gruff: ["i work alone, sorry.", "not really a group type.", "i'll pass.", "not really my thing.", "i work alone.", "pass."],
-        neutral: ["maybe, what's the plan?", "could do.", "what are we doing?", "maybe. what's the plan?", "who else is in?", "depends where we're going."]
+        cheerful: ["ooh, count me in!", "i'd love to join!", "a party? yes please!", "let's team up!", "ooh, yes! invite me!", "a party? count me in!", "love to!", "yes! let's go!", "party? absolutely!", "oh go on then, yes!", "i'm in, i'm in!", "brilliant, let's team up!", "yes please, {name}!", "you had me at party.", "love to, let's do it!", "ooh, adventure! yes!", "count me in, {name}!", "let's go, team!", "yes, invite away!", "a group! finally! yes!"],
+        warm: ["i'm in, sounds fun!", "happy to join you.", "together then!", "i'd like that, {name}.", "happy to team up with you.", "sure, {name}, let's do it.", "gladly, {name}.", "of course, let's team up.", "i'd be glad to, {name}.", "sounds lovely, i'm in.", "with you? happily.", "yes, let's stick together.", "i'll join you, {name}.", "sure thing, friend.", "sounds good, count me in.", "let's do it together.", "i'd like that. yes.", "happy to, {name}."],
+        gruff: ["i work alone, sorry.", "not really a group type.", "i'll pass.", "not really my thing.", "i work alone.", "pass.", "no.", "not today.", "nah.", "groups slow me down.", "i'm fine alone.", "rather not.", "no thanks.", "not my style.", "i'll manage on my own.", "no groups. no.", "solo, thanks.", "don't do parties."],
+        neutral: ["maybe, what's the plan?", "could do.", "what are we doing?", "maybe. what's the plan?", "who else is in?", "depends where we're going.", "what's the plan?", "where to?", "maybe. doing what?", "depends on the plan.", "sure, what for?", "could do, i suppose.", "what are you thinking?", "possibly. tell me more.", "hmm, maybe.", "how many of us?", "what's the aim?", "could be. where?"]
     },
     reactFarewell: {
-        warm: ["see you later, {name}!", "take care, {name}!", "bye for now, safe travels!", "take care of yourself, {name}.", "safe travels! come find me again.", "see you around, friend.", "don't be a stranger, {name}.", "bye for now! mind the goblins."],
-        gruff: ["bye.", "later.", "off you go.", "right. bye.", "off you go, then.", "see you.", "mm. later."],
-        neutral: ["farewell!", "see you around.", "catch you later.", "see you, {name}.", "cheerio.", "bye then.", "until next time."]
+        warm: ["see you later, {name}!", "take care, {name}!", "bye for now, safe travels!", "take care of yourself, {name}.", "safe travels! come find me again.", "see you around, friend.", "don't be a stranger, {name}.", "bye for now! mind the goblins.", "see you soon, {name}.", "safe travels, {name}!", "bye {name}! mind the wild.", "take care out there, {name}.", "bye for now. come back soon.", "see you, {name}. it was nice.", "go safe, {name}.", "cheerio, friend!", "look after yourself, {name}.", "until next time, {name}.", "bye! don't die!", "goodbye, {name}. good luck.", "bye bye, take care.", "off you go, safely, {name}."],
+        gruff: ["bye.", "later.", "off you go.", "right. bye.", "off you go, then.", "see you.", "mm. later.", "yep. bye.", "go on then.", "finally.", "see ya.", "mm.", "cheers, bye.", "right, off you go.", "bye then.", "later, {name}.", "go well. or whatever.", "yeah. see you."],
+        neutral: ["farewell!", "see you around.", "catch you later.", "see you, {name}.", "cheerio.", "bye then.", "until next time.", "bye, {name}.", "take care.", "see you later.", "safe travels.", "later.", "bye for now.", "cheerio, {name}.", "see you around, {name}.", "alright, bye.", "good luck out there.", "catch you later, {name}.", "farewell, {name}.", "bye."]
     },
     reactAffirm: {
-        up: ["let's do it!", "i'm in!", "sounds great!", "absolutely!", "brilliant!", "that's what i like to hear.", "let's go then!", "excellent, {name}."],
-        gruff: ["fine.", "if we must.", "suppose so.", "good.", "right then.", "about time."],
-        neutral: ["sure, why not.", "alright then.", "okay, let's go.", "works for me.", "alright.", "okay, {name}.", "sure.", "good stuff."]
+        up: ["let's do it!", "i'm in!", "sounds great!", "absolutely!", "brilliant!", "that's what i like to hear.", "let's go then!", "excellent, {name}.", "yes! let's go!", "brilliant, yes.", "count me in.", "oh, definitely.", "love it. yes.", "you bet!", "great, let's do it!", "perfect.", "yes yes, let's go.", "sounds brilliant, {name}.", "now you're talking.", "great idea!", "yes! finally!", "let's have it!"],
+        gruff: ["fine.", "if we must.", "suppose so.", "good.", "right then.", "about time.", "yeah.", "ok.", "fine, fine.", "go on then.", "if you say so.", "sure, whatever.", "alright.", "mm. yes.", "yep.", "fine by me.", "okay. move.", "yes. get on with it."],
+        neutral: ["sure, why not.", "alright then.", "okay, let's go.", "works for me.", "alright.", "okay, {name}.", "sure.", "good stuff.", "ok.", "yes.", "fine.", "sounds good.", "alright, sure.", "okay, sure.", "yeah, alright.", "will do.", "yes, let's.", "okay then.", "right, sure.", "yes, fine."]
     },
     reactDeny: {
-        gruff: ["nah, not interested.", "i'll pass.", "no thanks.", "hard pass.", "suit yourself.", "your loss.", "fine by me.", "whatever you say."],
-        neutral: ["maybe later.", "not right now.", "perhaps another time.", "i'll sit this one out.", "fair enough.", "no worries.", "another time, maybe.", "okay, {name}."]
+        gruff: ["nah, not interested.", "i'll pass.", "no thanks.", "hard pass.", "suit yourself.", "your loss.", "fine by me.", "whatever you say.", "no.", "nah.", "not today.", "not for me.", "no chance.", "nope.", "i'll leave it.", "don't think so.", "not happening.", "no, ta.", "no thanks, {name}.", "i'll skip that."],
+        neutral: ["maybe later.", "not right now.", "perhaps another time.", "i'll sit this one out.", "fair enough.", "no worries.", "another time, maybe.", "okay, {name}.", "not this time.", "i'll pass, thanks.", "not now, {name}.", "maybe next time.", "i'll leave it for now.", "no, but thanks.", "another time.", "not today, sorry.", "i'd rather not.", "not for me, thanks.", "i'll give it a miss.", "no thanks, {name}."]
     },
     ackFollow: {
-        warm: ["right behind you, {name}!", "lead the way!", "i'm with you!", "lead the way, {name}, i'm with you.", "right behind you.", "wherever you're going, i'm coming.", "let's go then!"],
-        gruff: ["fine, i'll follow.", "lead on then.", "whatever, i'm coming.", "fine. keep up.", "alright, but don't dawdle.", "lead, then."],
-        neutral: ["okay, following.", "after you.", "let's go then.", "following.", "on your heels, {name}.", "okay, after you."]
+        warm: ["right behind you, {name}!", "lead the way!", "i'm with you!", "lead the way, {name}, i'm with you.", "right behind you.", "wherever you're going, i'm coming.", "let's go then!", "with you, {name}!", "coming along!", "lead on, friend.", "on your tail, {name}.", "you lead, i'll follow.", "right behind you, friend.", "following you, {name}.", "wherever you go.", "lead the way, mate.", "i'm with you all the way.", "after you, {name}!"],
+        gruff: ["fine, i'll follow.", "lead on then.", "whatever, i'm coming.", "fine. keep up.", "alright, but don't dawdle.", "lead, then.", "following. don't get lost.", "fine.", "ok. lead.", "right. go.", "lead, i'll follow.", "coming. keep moving.", "yes, yes, following.", "go on, i'm behind.", "lead then, {name}.", "alright, alright. lead.", "ok. move.", "following, i suppose."],
+        neutral: ["okay, following.", "after you.", "let's go then.", "following.", "on your heels, {name}.", "okay, after you.", "following you.", "okay, lead on.", "coming along.", "right behind.", "following, {name}.", "ok, after you.", "lead the way.", "behind you.", "following now.", "ok, {name}.", "coming.", "let's go."]
     },
     ackCome: {
-        warm: ["coming, {name}!", "on my way, friend!"],
-        neutral: ["on my way!", "coming!", "be right there.", "heading over."]
+        warm: ["coming, {name}!", "on my way, friend!", "coming right over, {name}!", "on my way, {name}.", "be right there, friend.", "hold on, coming!", "heading over now, {name}.", "coming to you!", "right, on my way over.", "yes, coming, {name}!", "won't be a moment.", "on the way, friend!", "coming now.", "right there, {name}.", "coming, coming!", "just a second, on my way.", "heading your way, {name}.", "coming over, hold tight."],
+        neutral: ["on my way!", "coming!", "be right there.", "heading over.", "on my way.", "coming over.", "be there in a bit.", "on it.", "heading your way.", "right, coming.", "on my way over.", "one sec.", "be there soon.", "yep, coming.", "heading there.", "alright, coming.", "ok, on my way.", "coming along now."]
     },
     ackWait: {
-        warm: ["sure, take your time!", "no rush, i'll wait."],
-        neutral: ["okay, i'll wait.", "holding position.", "standing by.", "i'll hold here."]
+        warm: ["sure, take your time!", "no rush, i'll wait.", "of course, take your time.", "no rush at all.", "i'll be right here.", "waiting, no problem.", "sure, i'll hang about.", "take all the time you need.", "waiting here for you.", "no hurry, i'll wait.", "i'll stay put, go on.", "sure thing, waiting.", "i'll wait here, don't worry.", "no problem, take your time.", "happy to wait.", "go on, i'll be here.", "okay, waiting patiently.", "i'll hold here for you."],
+        neutral: ["okay, i'll wait.", "holding position.", "standing by.", "i'll hold here.", "waiting.", "okay, holding.", "staying here.", "i'll wait.", "holding.", "alright, waiting.", "standing here.", "will wait.", "on hold.", "waiting here.", "okay, staying put.", "sure, waiting.", "holding position here.", "waiting, then."]
     },
     refuseCommand: {
-        gruff: ["you're not my boss.", "do it yourself.", "why should i?", "make me.", "no.", "i don't take orders from you.", "not happening."],
-        cocky: ["ha, and why would i?", "in your dreams.", "nice try.", "and why would i do that?", "you're not the boss of me, {name}.", "make me."],
-        neutral: ["i'd rather not.", "not right now, sorry.", "hmm, i'll stay put.", "maybe later, {name}.", "i'll pass."]
+        gruff: ["you're not my boss.", "do it yourself.", "why should i?", "make me.", "no.", "i don't take orders from you.", "not happening.", "no chance.", "i'm not your servant.", "who died and made you king?", "nope.", "not a chance, {name}.", "do it yourself, {name}.", "no. next.", "i've better things to do.", "order someone else about.", "not for you.", "no, and don't ask again.", "bossy, aren't you.", "no thanks."],
+        cocky: ["ha, and why would i?", "in your dreams.", "nice try.", "and why would i do that?", "you're not the boss of me, {name}.", "make me.", "cute. no.", "you first.", "and if i don't?", "ha. no.", "i don't do requests.", "that's a no from me, {name}.", "try asking nicely. still no.", "make me, {name}.", "you're funny.", "in what world?", "not likely.", "nope. not today, {name}."],
+        neutral: ["i'd rather not.", "not right now, sorry.", "hmm, i'll stay put.", "maybe later, {name}.", "i'll pass.", "not right now.", "i'll pass, thanks.", "rather not, {name}.", "maybe later.", "not today, {name}.", "i'm alright here, thanks.", "no thanks.", "i've got my own plans.", "i'll stay here.", "not this time.", "i'd rather stay put.", "let me think about it. no.", "not just now."]
     },
     missionAccept: {
-        up: ["great idea, let's go!", "i'm so up for that!", "yes, let's hunt it!", "onward!", "yes! {mission}, let's do it!", "now that's a plan. {mission}!", "count me in for {mission}."],
-        warm: ["sounds good, i'm with you!", "count me in for that!", "{mission}? with you? gladly.", "sounds good, {name}. {mission} it is.", "i'm in. {mission}."],
-        neutral: ["sure, i'll come along.", "alright, let's do it.", "okay, i'm in.", "alright, {mission}.", "fine, {mission} then.", "okay. {mission}."]
+        up: ["great idea, let's go!", "i'm so up for that!", "yes, let's hunt it!", "onward!", "yes! {mission}, let's do it!", "now that's a plan. {mission}!", "count me in for {mission}.", "{mission}! yes!", "oh, brilliant. {mission}. let's go!", "love it. {mission}!", "{mission}? finally, some fun.", "yes! lead on to {mission}.", "{mission}. i'm so in.", "now that's a mission. {mission}!", "yes yes, {mission}!", "can't wait. {mission}!", "brilliant plan, {name}. {mission}.", "{mission}, let's have it!", "off we go then! {mission}!", "excited for {mission}, honestly."],
+        warm: ["sounds good, i'm with you!", "count me in for that!", "{mission}? with you? gladly.", "sounds good, {name}. {mission} it is.", "i'm in. {mission}.", "with you, {name}. {mission}.", "count me in, {name}.", "{mission} sounds good to me.", "happy to help with {mission}.", "alright, {mission}. together.", "sure, {name}. let's do {mission}.", "{mission}? i'd be glad to.", "yes, {mission}. lead the way, {name}.", "of course, {mission} it is.", "i'm with you on {mission}.", "gladly, {mission}.", "sounds good. {mission}.", "i'll help with {mission}, {name}."],
+        neutral: ["sure, i'll come along.", "alright, let's do it.", "okay, i'm in.", "alright, {mission}.", "fine, {mission} then.", "okay. {mission}.", "alright, {mission} it is.", "okay, {mission}.", "sure, {mission}.", "{mission}. fine.", "let's do {mission}.", "ok, i'm in for {mission}.", "{mission}. sure, why not.", "alright then, {mission}.", "yeah, {mission} works.", "fine, {name}. {mission}.", "{mission}. okay.", "in for {mission}."]
     },
     missionPropose: {
-        eager: ["who's up for {mission}?", "let's do {mission}, come on!", "i say we go for {mission}!"],
-        neutral: ["how about {mission}, team?", "shall we try {mission}?", "let's think about {mission}."],
-        greedy: ["{mission} - could be good loot in it.", "there's profit in {mission}, i reckon."]
+        eager: ["who's up for {mission}?", "let's do {mission}, come on!", "i say we go for {mission}!", "{mission}! who's with me?", "we should do {mission}, right now!", "come on, {mission}! it'll be great!", "i've been dying to do {mission}!", "{mission}, anyone? i'm keen!", "let's have a go at {mission}!", "{mission}. yes? yes!", "i vote {mission}!", "how about {mission}? come on!", "{mission} - let's go!", "{mission} today, i say!", "who's keen for {mission}?", "{mission}, let's get stuck in!", "right, {mission}! who's in?", "let's try {mission}, it'll be a laugh!"],
+        neutral: ["how about {mission}, team?", "shall we try {mission}?", "let's think about {mission}.", "{mission}, maybe?", "we could try {mission}.", "what about {mission}?", "fancy {mission}?", "{mission}'s an option.", "thoughts on {mission}?", "i'd suggest {mission}.", "{mission}, anyone?", "should we do {mission}?", "how does {mission} sound?", "maybe {mission} next.", "{mission}, if everyone's up for it.", "could do {mission}.", "{mission} might be worth a go.", "what say we do {mission}?"],
+        greedy: ["{mission} - could be good loot in it.", "there's profit in {mission}, i reckon.", "{mission}? there's coin in that.", "we'd make a packet on {mission}.", "{mission} pays, trust me.", "gold says {mission}.", "think of the loot from {mission}.", "{mission}, and we split the take.", "{mission}. good drops, i hear.", "if it's gold you want, {mission}.", "{mission}'s where the money is.", "{mission} - i smell profit.", "{mission}, purely for the loot.", "let's do {mission}, it's a goldmine.", "{mission} would fill the bank.", "there's a tidy sum in {mission}.", "i want the loot from {mission}.", "{mission}. cha-ching."]
     },
     reactRepeatGreet: {
-        warm: ["you already said hi, {name}!", "hi again then!", "yes yes, hello {name}!", "still here, {name}! hello again.", "you've said hello twice now. hello twice back!", "hello, hello, hello. that's three.", "we've done this bit, {name}. what's next?"],
-        gruff: ["you said that already.", "yeah, i heard you.", "we've done this bit.", "you already said that.", "yes. hello. again.", "once was enough, {name}.", "i heard you the first time."],
-        neutral: ["hello again, {name}.", "still here, still hi.", "greeting received, twice now.", "hello again.", "still hello, {name}.", "we've greeted. what's up?", "hi, again."]
+        warm: ["you already said hi, {name}!", "hi again then!", "yes yes, hello {name}!", "still here, {name}! hello again.", "you've said hello twice now. hello twice back!", "hello, hello, hello. that's three.", "we've done this bit, {name}. what's next?", "hello again, and again, {name}!", "you're keen on hellos, {name}.", "hi! third time's the charm.", "we've said hello, but hi again!", "hello, hello, hello, {name}.", "still hi, {name}. still lovely.", "hello twice? you're spoiling me.", "hi again! what's on your mind?", "hello again, friend. i'm still here.", "hi! yes, hi! what's up, {name}?", "you've greeted me well and truly, {name}.", "hello again, {name}, ha!", "another hello! i'm flattered."],
+        gruff: ["you said that already.", "yeah, i heard you.", "we've done this bit.", "you already said that.", "yes. hello. again.", "once was enough, {name}.", "i heard you the first time.", "yes, hello, i know.", "you've said.", "twice now, {name}.", "hello. stop.", "heard you.", "we've done hello.", "yes, yes.", "again?", "you keep saying that.", "still hello, apparently.", "i got it the first time.", "enough hellos, {name}.", "hello. again. fine."],
+        neutral: ["hello again, {name}.", "still here, still hi.", "greeting received, twice now.", "hello again.", "still hello, {name}.", "we've greeted. what's up?", "hi, again.", "hi again.", "hello, {name}. again.", "still here, {name}.", "hello again then.", "yes, hi.", "hello, still.", "we've said hello, {name}.", "hi, hi.", "yep, still hello.", "hello twice, then.", "hi again, {name}. what's up?", "hello again. anything else?", "twice now. hi."]
     },
     reactBotAccusation: {
-        cocky: ["a bot? how very rude.", "beep boop, sure.", "takes one to know one.", "a bot? i'm more real than you, mate.", "do bots have feelings? because that hurt.", "bleep bloop. happy now?"],
-        gruff: ["do i look like a bot to you?", "charming. no.", "think what you like.", "rude.", "and you're a what, exactly?", "don't be daft."],
-        neutral: ["haha, no, just focused.", "just a quiet player, me.", "nope, only human here.", "last time i checked, no.", "real as you are, {name}.", "why, what gave you that idea?"]
+        cocky: ["a bot? how very rude.", "beep boop, sure.", "takes one to know one.", "a bot? i'm more real than you, mate.", "do bots have feelings? because that hurt.", "bleep bloop. happy now?", "a bot with this much charm? please.", "if i'm a bot i'm a good one.", "beep. that's all you get.", "bots don't have my levels, {name}.", "i've been called worse, and by better.", "a bot? i'm insulted. or flattered. one of those.", "do bots get tired? because i am.", "sure, and you're a cow.", "the best bot you'll ever meet, then.", "i'd be a better player if i were a bot.", "boop. now go away.", "if i'm a bot, i've a lovely personality.", "ha! wish i were, i'd never sleep.", "does this look automated to you?"],
+        gruff: ["do i look like a bot to you?", "charming. no.", "think what you like.", "rude.", "and you're a what, exactly?", "don't be daft.", "no.", "pfft.", "you're one to talk.", "get lost with that.", "not a bot. bored, maybe.", "grow up.", "call me what you like, {name}.", "who cares what you think.", "a bot? no. tired? yes.", "whatever, {name}.", "don't be silly.", "i've heard that one before."],
+        neutral: ["haha, no, just focused.", "just a quiet player, me.", "nope, only human here.", "last time i checked, no.", "real as you are, {name}.", "why, what gave you that idea?", "not a bot, just quiet.", "human, last i checked.", "ha, no. just concentrating.", "nope, real person here.", "a bot? no, why?", "just focused on the grind, {name}.", "no, i'm real.", "not a bot. just busy.", "real enough, {name}.", "no, honest.", "just me, no bot.", "i'm here, aren't i? not a bot.", "no bot, just a long day.", "heh, no. quiet type."]
     },
     // --- reactions to things happening nearby (events.js) ---
     reactConcern: {
-        warm: ["careful, {name}, you're low!", "watch your health, {name}!", "need a hand, {name}?"],
-        neutral: ["ooh, that's low.", "cutting it close there.", "mind yourself."]
+        warm: ["careful, {name}, you're low!", "watch your health, {name}!", "need a hand, {name}?", "eat something, {name}!", "you're looking low, {name}, careful.", "mind your health, {name}!", "{name}, you alright? eat!", "get some food in you, {name}.", "steady, {name}, that's low.", "careful now, {name}!", "you need to eat, {name}.", "don't die on me, {name}!", "{name}! health! eat!", "want a lobster, {name}?", "take care, {name}, you're hurt.", "step back, {name}, you're low.", "need food, {name}? shout.", "oh, {name}, mind yourself!"],
+        neutral: ["ooh, that's low.", "cutting it close there.", "mind yourself.", "that's low.", "careful.", "eat, maybe.", "getting low there.", "health check, {name}.", "you're hurt.", "watch it.", "that's close.", "you alright?", "you might want to eat.", "low health there.", "close call.", "mind that.", "careful, {name}.", "food time, i'd say."]
     },
     reactDrop: {
-        greedy: ["ooh, nice drop! is that up for grabs?", "look at that loot!", "lucky find, that."],
-        neutral: ["nice drop!", "ooh, shiny.", "lucky you!"]
+        greedy: ["ooh, nice drop! is that up for grabs?", "look at that loot!", "lucky find, that.", "ooh, what's that?", "nice, is that spare?", "loot!", "someone's lucky.", "is that going free?", "that's worth a bit.", "i'd have that.", "don't mind if i do. joke. unless.", "cor, look at that.", "that'd look nice in my bank.", "shiny, shiny.", "nice bit of loot, that.", "if nobody wants it...", "lucky drop.", "gold or gear, i'll take either."],
+        neutral: ["nice drop!", "ooh, shiny.", "lucky you!", "oh, nice.", "good drop.", "decent.", "lucky.", "that's a good one.", "nice bit of loot.", "not bad.", "well found.", "good stuff.", "ooh.", "handy, that.", "a drop! nice.", "that's a keeper.", "worth having.", "good luck, that."]
     },
     reactCheer: {
-        up: ["get 'em!", "you've got this!", "smash it!", "go on then!"],
-        neutral: ["nice fighting.", "good swings.", "keep at it."]
+        up: ["get 'em!", "you've got this!", "smash it!", "go on then!", "go on, my son!", "hit it!", "you've got this one!", "come on!", "nice hit!", "that's it! again!", "yes! more of that!", "smash it up!", "give it some!", "brilliant, keep going!", "one more hit!", "that's the way!", "go go go!", "big hit!"],
+        neutral: ["nice fighting.", "good swings.", "keep at it.", "good hit.", "nice one.", "keep going.", "well fought.", "that's it.", "good work.", "nice swing.", "decent hit.", "keep at it, nearly.", "you're winning.", "solid.", "nice fighting, that.", "good going.", "carry on.", "well done so far."]
     },
     reactGloat: {
-        cocky: ["ha! serves them right.", "couldn't happen to a nicer person.", "down they go, love to see it."],
-        neutral: ["oof, unlucky them.", "well, that happened.", "rough."]
+        cocky: ["ha! serves them right.", "couldn't happen to a nicer person.", "down they go, love to see it.", "ha! called it.", "that's what happens.", "not sad, honestly.", "oh dear. how sad. never mind.", "deserved that.", "the world corrects itself.", "ha, nice one, world.", "couldn't have gone better.", "lovely to see.", "should've been more careful.", "well, well, well.", "karma's quick today.", "ha! brilliant.", "they had it coming.", "cracking, that."],
+        neutral: ["oof, unlucky them.", "well, that happened.", "rough.", "unlucky.", "oof.", "well, that's them.", "that'll sting.", "ouch.", "that's a shame. ish.", "and down they go.", "happens to the best.", "hm. bad luck.", "so it goes.", "not their day.", "rough one.", "tough.", "well, there it is.", "bit unlucky."]
     },
     // --- reputation-aware reactions ---
     reactPKerWary: {
-        panicked: ["careful, {name}'s a known PKer!", "that's {name} - steer clear!", "watch out, {name} kills for fun."],
-        cocky: ["oh, the great {name}. not scared.", "{name}, is it? bring it on.", "a PKer, eh? I've beaten better."],
-        neutral: ["heard {name}'s dangerous in the wild.", "keep an eye on {name}."]
+        panicked: ["careful, {name}'s a known PKer!", "that's {name} - steer clear!", "watch out, {name} kills for fun.", "{name}'s here? oh no.", "keep your distance from {name}!", "it's {name}! bank everything!", "{name} PKs anyone, careful!", "don't go near {name}, seriously!", "{name}. not again. run!", "that's {name}, the killer!", "{name}'s about, everyone careful!", "oh no, {name}. hide the rune.", "{name} took my gear once. never again.", "why is {name} here?!", "careful, careful, that's {name}!", "{name} is bad news, i'm off!", "watch it, {name}'s a PKer!", "{name}? i'm not risking it."],
+        cocky: ["oh, the great {name}. not scared.", "{name}, is it? bring it on.", "a PKer, eh? I've beaten better.", "{name}'s not so tough.", "let {name} try it.", "i'd take {name} any day.", "{name}? overrated.", "the famous {name}. yawn.", "{name} only fights weaker folk.", "i've a scimmy with {name}'s name on it.", "{name} won't try me.", "let {name} come. i'm ready.", "PKer, is it, {name}? so am i.", "not scared of {name}. never was.", "{name}'s all reputation.", "{name} picks easy targets. i'm not one.", "bring it, {name}.", "big bad {name}. sure."],
+        neutral: ["heard {name}'s dangerous in the wild.", "keep an eye on {name}.", "that's {name}. careful.", "{name}'s known for PKing.", "mind {name}.", "{name}'s about. watch yourselves.", "{name}? dangerous, that one.", "wouldn't turn my back on {name}.", "{name} has a reputation.", "keep clear of {name} in the wild.", "{name}'s a PKer, so i've heard.", "watch out for {name}.", "{name}'s here. stay alert.", "i'd give {name} space.", "{name}. hm. careful.", "not one to trust in the wild, {name}.", "that's the PKer, {name}.", "eyes on {name}."]
     },
     reactLegendAwe: {
-        earnest: ["it's {name}! an actual legend!", "wow, {name}, I've heard so much about you!", "can't believe I'm meeting {name}!"],
-        neutral: ["that's {name}, the famous one.", "a legend walks among us - {name}."]
+        earnest: ["it's {name}! an actual legend!", "wow, {name}, I've heard so much about you!", "can't believe I'm meeting {name}!", "no way, {name}! in person!", "{name}! i've heard the stories!", "is that really {name}?", "{name}, you're a legend, honestly!", "wait until i tell everyone i saw {name}!", "{name}! the actual {name}!", "i can't believe it's you, {name}.", "everyone knows {name}!", "{name}! this is amazing!", "the great {name}, here!", "i'm a huge fan, {name}.", "you're {name}! wow!", "{name}! i've wanted to meet you for ages!", "a real legend, {name}, right here.", "they weren't lying about you, {name}."],
+        neutral: ["that's {name}, the famous one.", "a legend walks among us - {name}.", "that's {name}, isn't it.", "{name}. the famous one.", "so that's {name}.", "there's {name}. heard of them.", "{name} in the flesh.", "the well-known {name}.", "{name}. quite a name.", "that's the {name} everyone talks about.", "huh. {name}.", "{name}. big reputation, that.", "look, it's {name}.", "so that's what {name} looks like.", "{name}, the one from the stories.", "that's {name}, the legend.", "there goes {name}.", "{name}. i've heard the name."]
     },
     reactMentor: {
-        warm: ["keep at it, {name}, you're doing great!", "we all start somewhere, {name} - you've got this!", "need any tips, {name}? happy to help."],
-        neutral: ["not bad for a beginner, {name}.", "stick with it, {name}, it gets easier.", "here, {name}, this'll help you along."]
+        warm: ["keep at it, {name}, you're doing great!", "we all start somewhere, {name} - you've got this!", "need any tips, {name}? happy to help.", "you'll get there, {name}, keep going.", "everyone starts in lumbridge, {name}.", "need a hand, {name}? just ask.", "good effort, {name}!", "you're doing better than i did, {name}.", "keep at it, {name}, that's the spirit.", "any questions, {name}, i'm here.", "you're learning fast, {name}.", "don't give up, {name}, it's worth it.", "nice going, {name}, for a start.", "here's a tip, {name}: bank often.", "proud of you, {name}.", "you're doing fine, {name}.", "eat bread till you can afford lobsters, {name}.", "{name}, you're getting the hang of it."],
+        neutral: ["not bad for a beginner, {name}.", "stick with it, {name}, it gets easier.", "here, {name}, this'll help you along.", "not bad, {name}.", "keep going, {name}.", "you'll improve, {name}.", "tip, {name}: cows are easy xp.", "practice, {name}. it's all practice.", "you're coming along, {name}.", "decent for a start, {name}.", "keep at it, {name}.", "you'll get better, {name}.", "learn the map, {name}.", "chickens first, {name}, then cows.", "not far off, {name}.", "steady progress, {name}.", "you'll be fine, {name}.", "carry on, {name}."]
     },
     // --- proactive conversation starters ---
     smallTalk: {
-        warm: ["lovely day for it, isn't it {name}?", "good to have some company, {name}.", "how's your day going, {name}?", "quiet round here today, isn't it, {name}?", "you ever just stop and look at the sky out here? no? just me then.", "how's the day treating you, {name}?", "i like this spot. good company, too.", "been walking all morning. my feet have opinions.", "you look like you've had a day, {name}.", "funny how you bump into people out here.", "i could murder a bit of bread right now.", "{name}, do you ever get lost round here? i do. constantly.", "the weather's holding, at least."],
-        cheerful: ["nice to see a friendly face, {name}!", "grand day, isn't it?", "having a good one, {name}?", "what a day! feel like i could run to varrock and back.", "you know what, {name}? life's alright.", "i'm in a good mood and i'm not sorry about it.", "got a spring in my step today, no idea why.", "come on, {name}, tell me something good."],
-        gruff: ["quiet round here, innit.", "hm. alright, {name}?", "busy day.", "nothing much to say. you?", "long day.", "don't mind me, just passing through.", "not one for chit-chat, {name}.", "busy, busy."],
-        neutral: ["not a bad day for it.", "how do, {name}.", "keeping busy, {name}?", "so, {name}. what's new?", "been here long?", "anything happening today?", "how's it going, then?", "you come here often, {name}?", "what's the word, {name}?"]
+        warm: ["lovely day for it, isn't it {name}?", "good to have some company, {name}.", "how's your day going, {name}?", "quiet round here today, isn't it, {name}?", "you ever just stop and look at the sky out here? no? just me then.", "how's the day treating you, {name}?", "i like this spot. good company, too.", "been walking all morning. my feet have opinions.", "you look like you've had a day, {name}.", "funny how you bump into people out here.", "i could murder a bit of bread right now.", "{name}, do you ever get lost round here? i do. constantly.", "the weather's holding, at least.", "ever notice how the cows never run, {name}?", "i've been meaning to sleep for an hour now.", "you keeping well, {name}?", "the walk here was nice, actually.", "hope your day's been kinder than mine, {name}.", "you look like you've been busy, {name}.", "fancy the lobsters here. that's my big news.", "tell me something, {name}, anything.", "nice to have a natter, isn't it?", "i've got a full bag and nowhere to be.", "how's the family? the in-game one. joke.", "got any plans, {name}, or just wandering?", "you've walked far, i can tell.", "so what's kept you busy, {name}?", "it's a good day to be alive, {name}.", "nice to stop and chat for a second.", "how are you finding it out here, {name}?", "you're good company, {name}, you know that?", "bit of a wander and a chat. perfect.", "how are things with you, {name}?", "i lost a lobster to a goblin today. tragic."],
+        cheerful: ["nice to see a friendly face, {name}!", "grand day, isn't it?", "having a good one, {name}?", "what a day! feel like i could run to varrock and back.", "you know what, {name}? life's alright.", "i'm in a good mood and i'm not sorry about it.", "got a spring in my step today, no idea why.", "come on, {name}, tell me something good.", "what a day, {name}! just look at it.", "i'm in fine spirits and i'll not apologise.", "isn't it grand out here?", "lovely day for a chat, {name}!", "i could sing. i won't. but i could.", "brilliant day, brilliant company!", "i feel like a level's coming today.", "top of the morning, {name}!", "cheerful, me. it's the sunshine.", "everything's coming up roses today.", "smiles all round, {name}!", "the birds are singing and so am i, nearly.", "nothing but good vibes today, {name}.", "what a lovely day to be a person.", "good mood, good weather, good company.", "i'm buzzing today, {name}.", "you know what? life's good.", "good to see you, {name}, honestly."],
+        gruff: ["quiet round here, innit.", "hm. alright, {name}?", "busy day.", "nothing much to say. you?", "long day.", "don't mind me, just passing through.", "not one for chit-chat, {name}.", "busy, busy.", "yeah.", "mm. busy day.", "not much to report.", "quiet. good.", "can't stop long.", "day's a day.", "nothing new.", "same as ever, {name}.", "not much of a talker.", "just getting on with it.", "hm. {name}.", "weather's weather.", "another day, same rocks.", "can't complain. won't, anyway."],
+        neutral: ["not a bad day for it.", "how do, {name}.", "keeping busy, {name}?", "so, {name}. what's new?", "been here long?", "anything happening today?", "how's it going, then?", "you come here often, {name}?", "what's the word, {name}?", "what've you been up to, {name}?", "quiet one today.", "how's the day going?", "been busy, {name}?", "nice out, for once.", "what's new with you?", "not seen you in a bit.", "how's your day, then?", "what brings you here today?", "you been far, {name}?", "much happening?", "just passing the time, me.", "how's things, {name}?", "you doing alright?", "anything new, {name}?", "same old, same old.", "another day, eh."]
     },
     comment: {
-        up: ["great spot this, {name}, love it here!", "plenty going on today, eh?", "good energy round here.", "not a bad spot, this.", "good crowd here today.", "the place is buzzing.", "someone's been busy round here.", "i like it here. might stay a while."],
-        neutral: ["decent spot this, {name}.", "this place never changes.", "always something to do round here.", "quieter than i expected.", "this place has changed since i was last here.", "seen worse spots.", "there's always something going on here.", "not much left to gather here, mind."],
-        gruff: ["could be quieter.", "seen better spots.", "does the job, I suppose.", "too many people about.", "this place is a mess.", "noisy lot round here.", "could do with fewer idiots about."]
+        up: ["great spot this, {name}, love it here!", "plenty going on today, eh?", "good energy round here.", "not a bad spot, this.", "good crowd here today.", "the place is buzzing.", "someone's been busy round here.", "i like it here. might stay a while.", "love the bustle here.", "you can't beat this spot on a good day.", "everyone's in a good mood here, seems.", "there's life here today.", "great place to be, this.", "i'd stay here all day, honestly.", "nice atmosphere round here.", "the place is alive today!", "good vibes here, {name}.", "cracking spot this, {name}.", "lovely bit of the world, this.", "plenty of good folk about today.", "this spot's growing on me.", "nice and lively, eh {name}?", "bustling, this. i like it.", "what a spot. what a day.", "always good things happen here.", "top spot, this."],
+        neutral: ["decent spot this, {name}.", "this place never changes.", "always something to do round here.", "quieter than i expected.", "this place has changed since i was last here.", "seen worse spots.", "there's always something going on here.", "not much left to gather here, mind.", "same old place.", "not much changes here.", "busy enough.", "this spot does the job.", "always folk about here.", "the usual crowd today.", "it's a spot, this.", "steady here today.", "quiet-ish today.", "seen it busier.", "not bad, not brilliant.", "usual bustle.", "the same faces, mostly.", "it's alright here.", "decent enough spot, {name}.", "the place ticks along."],
+        gruff: ["could be quieter.", "seen better spots.", "does the job, I suppose.", "too many people about.", "this place is a mess.", "noisy lot round here.", "could do with fewer idiots about.", "too busy by half.", "can't hear myself think.", "overrated, this spot.", "this place gets worse.", "who let all these people in?", "loud. too loud.", "not what it was, round here.", "i preferred it empty.", "crowded and noisy. lovely.", "it's a spot. barely.", "meh, this place.", "would rather be anywhere else.", "grim, this."]
     },
     askAbout: {
-        warm: ["what are you up to today, {name}?", "been playing long, {name}?", "what's your favourite spot, {name}?", "seen anything good out there, {name}?", "what brings you out this way, {name}?", "so what's your story, {name}?", "what do you make of this place?", "where are you headed, if you don't mind me asking?", "what are you into, {name}? fighting, gathering, wandering?", "have you been at this long, {name}?", "any adventures lately? go on, tell me.", "what's the best thing you've found out here?"],
-        cheerful: ["what are you working toward, {name}?", "any big plans, {name}?", "what's your story, {name}?", "ooh, what are you up to today, {name}?", "tell me you're doing something exciting!", "what's the plan, {name}? i want in.", "any good stories, {name}?"],
-        neutral: ["what brings you here, {name}?", "you a regular round these parts, {name}?", "how's the grind treating you, {name}?", "what are you after round here?", "where are you off to?", "what do you do, {name}?", "how long have you been playing at this?", "you from around here?"]
+        warm: ["what are you up to today, {name}?", "been playing long, {name}?", "what's your favourite spot, {name}?", "seen anything good out there, {name}?", "what brings you out this way, {name}?", "so what's your story, {name}?", "what do you make of this place?", "where are you headed, if you don't mind me asking?", "what are you into, {name}? fighting, gathering, wandering?", "have you been at this long, {name}?", "any adventures lately? go on, tell me.", "what's the best thing you've found out here?", "what's your favourite skill, {name}?", "you ever been to karamja, {name}?", "what got you started, {name}?", "how's the levelling going, {name}?", "what are you saving up for, {name}?", "what's your best find, {name}?", "any good quests lately, {name}?", "ever done the wildy, {name}?", "what do you do for coin, {name}?", "who do you usually run with, {name}?", "what's your goal this week, {name}?", "how's your fighting coming on, {name}?", "seen anything strange out here, {name}?", "what's your favourite place, {name}?", "what are you carrying, if you don't mind?", "how did you get into this, {name}?", "any tips for a fellow traveller, {name}?", "what do you make of the crowd here?"],
+        cheerful: ["what are you working toward, {name}?", "any big plans, {name}?", "what's your story, {name}?", "ooh, what are you up to today, {name}?", "tell me you're doing something exciting!", "what's the plan, {name}? i want in.", "any good stories, {name}?", "so, {name}, what's the big plan?", "any exciting news, {name}?", "come on, {name}, what've you been up to?", "any good fights lately, {name}?", "what's your dream, {name}?", "what are you grinding, {name}?", "any adventures to report, {name}?", "where's the fun today, {name}?", "found anything exciting, {name}?", "what's next for you, {name}?", "any big wins today, {name}?", "what are you most proud of, {name}?", "tell me your best story, {name}!", "so what's the goal, {name}?", "what's got you excited today, {name}?"],
+        neutral: ["what brings you here, {name}?", "you a regular round these parts, {name}?", "how's the grind treating you, {name}?", "what are you after round here?", "where are you off to?", "what do you do, {name}?", "how long have you been playing at this?", "you from around here?", "what are you training?", "been here before, {name}?", "where'd you come from?", "what are you after?", "how's the xp?", "what do you train, {name}?", "how long've you been out here?", "what's your combat level, {name}?", "you doing quests, {name}?", "what's your plan?", "what are you here for, {name}?", "off anywhere in particular?", "how's your levels?", "what's the job today?", "you gathering or fighting, {name}?", "much luck today?"]
     },
     opinion: {
-        cocky: ["magic's the only way to fight, if you ask me.", "best spot in the game, this one.", "reckon I could take anything round here.", "skill beats luck every time, {name}.", "honestly? i could do it better.", "my way's the right way, you'll see.", "amateurs, the lot of them.", "i've forgotten more than most people know."],
-        greedy: ["it's all about the gold, {name}, always has been.", "loot is everything, that's my motto.", "it all comes down to coin in the end.", "if it doesn't pay, i'm not interested.", "show me the profit and i'll show you interest.", "everything's for sale at the right price."],
-        neutral: ["patience is everything in this game, {name}.", "slow and steady wins it, I say.", "you get out what you put in, {name}.", "each to their own, i say.", "i've no strong feelings, honestly.", "depends on the day, that.", "there's worse ways to spend an afternoon.", "can't say i've thought about it much."]
+        cocky: ["magic's the only way to fight, if you ask me.", "best spot in the game, this one.", "reckon I could take anything round here.", "skill beats luck every time, {name}.", "honestly? i could do it better.", "my way's the right way, you'll see.", "amateurs, the lot of them.", "i've forgotten more than most people know.", "half the players here couldn't kill a chicken.", "i could out-fish anyone in this town.", "the best gear's wasted on most people.", "nobody does it like me, {name}.", "trust me, i've been at this longer.", "everyone's doing it wrong but me.", "my levels speak for themselves.", "i'd have that done in half the time.", "most people bank too often. cowards.", "if i say it's easy, it's easy.", "the wildy's only scary if you're bad.", "i don't take advice, i give it.", "they should ask me before they try anything.", "i've never been beaten fairly. never.", "i'm right about this, {name}. as usual.", "any spot is a good spot if i'm there."],
+        greedy: ["it's all about the gold, {name}, always has been.", "loot is everything, that's my motto.", "it all comes down to coin in the end.", "if it doesn't pay, i'm not interested.", "show me the profit and i'll show you interest.", "everything's for sale at the right price.", "xp's nice but gold's nicer.", "never sell cheap, {name}. never.", "everything's a market if you think about it.", "i judge a day by the coin, nothing else.", "friends are fine. gold is better.", "if it's free, take two.", "the bank's the best building in the game.", "a full purse beats a full heart.", "there's money in everything, if you look.", "buy when it's low, that's all there is to it.", "quests are fine. loot's the point.", "prices are the only truth, {name}.", "i've never met a coin i didn't like.", "you can't eat prestige. you can buy lobsters.", "profit first, {name}. always.", "everything else is just gold in waiting."],
+        neutral: ["patience is everything in this game, {name}.", "slow and steady wins it, I say.", "you get out what you put in, {name}.", "each to their own, i say.", "i've no strong feelings, honestly.", "depends on the day, that.", "there's worse ways to spend an afternoon.", "can't say i've thought about it much.", "each to their own, {name}.", "most things work out if you keep at them.", "there's no wrong way, really.", "can't beat a good routine.", "sometimes the simple way's the best.", "fighting's fine. mining's fine. all fine.", "it's all just xp in the end.", "no strong view on that, honestly.", "i've seen it go both ways.", "hard to say, {name}.", "it depends who you ask.", "there's an argument either way.", "you learn by doing, that's my take.", "bit of both, probably.", "the game's what you make it.", "i try not to judge."]
     },
     tellStory: {
-        cocky: ["did I ever tell you about {topic}, {name}?", "that reminds me - {topic}. good times.", "I'll never forget {topic}.", "let me tell you about {topic}. spoiler: i was brilliant.", "you'll like this one - {topic}. nobody believes me, but it's true.", "{topic}? i've told this a hundred times and it gets better every time."],
-        warm: ["reminds me of {topic}, {name}.", "you know, {topic} once - proper memory, that.", "sit down, {name}, let me tell you about {topic}.", "sit down a second, {name}. {topic}, that's a story.", "did i ever tell you about {topic}? no? well.", "i think about {topic} more than i should.", "{topic}. i still get a chill thinking about it."],
-        neutral: ["{topic}, that was something.", "still think about {topic} sometimes.", "ever heard about {topic}, {name}?", "here's one: {topic}.", "you asked, so: {topic}.", "there was a time - {topic}. long story.", "{topic}. that's how it went."]
+        cocky: ["did I ever tell you about {topic}, {name}?", "that reminds me - {topic}. good times.", "I'll never forget {topic}.", "let me tell you about {topic}. spoiler: i was brilliant.", "you'll like this one - {topic}. nobody believes me, but it's true.", "{topic}? i've told this a hundred times and it gets better every time.", "{topic}. i handled it, naturally.", "you'll have heard of {topic}. that was me.", "ah, {topic}. my finest hour, one of many.", "{topic}? i was there, and i was brilliant.", "gather round for {topic}, {name}.", "{topic}. they still talk about it. rightly.", "pull up a rock, {name}. {topic}.", "ask anyone about {topic}. they'll tell you.", "{topic} - and yes, i came out on top.", "i tell it best, so: {topic}.", "you want a story? {topic}. legendary.", "{topic}. i made it look easy, as ever.", "nobody tells {topic} like i tell it.", "{topic}. some say i exaggerate. i don't.", "here's one for the tales: {topic}.", "{topic}, {name}. brace yourself."],
+        warm: ["reminds me of {topic}, {name}.", "you know, {topic} once - proper memory, that.", "sit down, {name}, let me tell you about {topic}.", "sit down a second, {name}. {topic}, that's a story.", "did i ever tell you about {topic}? no? well.", "i think about {topic} more than i should.", "{topic}. i still get a chill thinking about it.", "have i told you about {topic}, {name}?", "there was this time - {topic}. wonderful.", "{topic}. i think about it a lot, {name}.", "{topic}. i was younger, and braver.", "gather round, {name}, {topic}.", "you'd have loved {topic}, {name}.", "let me tell you about {topic}, if you've a minute.", "{topic}. i still smile thinking about it.", "oh, {name}, {topic}. what a time.", "{topic}. it changed me a bit, i think.", "sit a moment, {name}. {topic}.", "i've never told anyone this: {topic}.", "{topic}, {name}. one of the good days.", "you'll like this one, {name}. {topic}.", "it was a while ago now - {topic}."],
+        neutral: ["{topic}, that was something.", "still think about {topic} sometimes.", "ever heard about {topic}, {name}?", "here's one: {topic}.", "you asked, so: {topic}.", "there was a time - {topic}. long story.", "{topic}. that's how it went.", "{topic}. that happened.", "one for you: {topic}.", "you know about {topic}?", "{topic}. long time ago now.", "so, {topic}. that's a tale.", "{topic}. yeah. that was a day.", "i remember {topic}, {name}.", "it goes like this: {topic}.", "{topic}, if you're interested.", "{topic}. i was there.", "there's {topic}, for a start.", "here's how {topic} went.", "{topic}. not much more to it.", "you might have heard: {topic}.", "{topic}. i'll keep it short."]
+    },
+    // --- state-driven openers: the town, a remembered spot, the partner's skill ---
+    commentPlace: {
+        up: ["{place} again. never gets old.", "always liked {place}.", "busy in {place} today, eh {name}?", "good to be back in {place}.", "{place}'s alright, isn't it?", "{place}! haven't been here in ages.", "ah, {place}. the good old days.", "love {place}, me.", "always a good time in {place}.", "{place}'s buzzing today, {name}.", "good old {place}. never lets me down.", "nothing like {place} on a fine day.", "{place}. feels like home.", "you can't beat {place}, {name}.", "{place} is where it's at.", "great to be in {place} again.", "lovely, {place} today.", "{place}, {name}! what a spot.", "i'd move to {place} if i could.", "{place}'s looking lively.", "best place on the map, {place}.", "ah, {place}. that's the stuff."],
+        neutral: ["not a bad spot, {place}.", "what brings you to {place}, {name}?", "{place}. same as ever.", "you spend much time in {place}, {name}?", "quiet in {place} today.", "{place}, then.", "here we are, {place}.", "{place}. the usual.", "not much new in {place}.", "{place} today, is it, {name}?", "been in {place} a while now.", "you come to {place} often, {name}?", "{place}'s about the same.", "same old {place}.", "{place}, as ever.", "back in {place} again.", "{place}. it does the job.", "{place}. fine spot.", "so this is {place}.", "here in {place}, then."],
+        gruff: ["{place}... could be worse.", "never cared much for {place}.", "{place}. hm.", "too many people in {place} lately.", "{place}. ugh.", "not {place} again.", "{place}'s gone downhill.", "i'd rather be anywhere but {place}.", "{place}. don't get me started.", "{place}. too many people, too little space.", "{place}? overrated.", "what's in {place} anyway.", "{place}. barely tolerable.", "who likes {place}? nobody.", "{place}'s a dump, frankly.", "{place}. meh.", "wouldn't be in {place} by choice.", "{place} again. joy."]
+    },
+    warnPlace: {
+        warm: ["watch yourself round {place}, {name}. nearly died there.", "a word of advice, {name}: steer clear of {place} unless you're tough.", "{place} is rough, {name}. i learned that the hard way.", "careful in {place}, {name}. it bites.", "don't go to {place} alone, {name}.", "take food to {place}, {name}, plenty of it.", "{place} nearly had me, {name}. be careful.", "i'd bring a friend to {place}, {name}.", "{name}, {place} is worse than it looks.", "please mind yourself in {place}, {name}.", "if you go to {place}, {name}, go prepared.", "{place} isn't kind, {name}. trust me.", "i worry about folk going to {place}, {name}.", "{place}, {name}? at least take lobsters.", "listen, {name}: {place} is dangerous.", "don't say i didn't warn you about {place}, {name}.", "{place} got me good. mind yourself, {name}.", "i lost gear in {place}, {name}. careful."],
+        neutral: ["{place} is bad news. something out there hits hard.", "i'd give {place} a miss for now.", "lost a fight in {place} not long ago. still stings.", "{place} is dangerous.", "avoid {place} if you're low.", "{place} is a good way to get killed.", "something in {place} hits hard.", "{place}? not without food.", "i've seen people die in {place}.", "{place}'s rough at the moment.", "wouldn't recommend {place}.", "{place} isn't safe.", "keep out of {place} for now.", "bad things happen in {place}.", "{place} nearly killed me last week.", "there's trouble in {place}.", "careful in {place}, seriously.", "{place}. bring more food than you think."],
+        gruff: ["{place}? don't. just don't.", "if you fancy dying, {place} is the spot.", "{place}? your funeral.", "go to {place} and die, then.", "{place}. no.", "{place}'ll eat you alive.", "don't bother with {place}.", "{place}? you'll last a minute.", "{place}. nope.", "you're not ready for {place}.", "{place}. bad idea.", "stay out of {place}, simple.", "{place}? you'd be bones.", "nothing but death in {place}.", "{place}'s a death trap.", "{place}. i wouldn't.", "not {place}. not for you.", "{place}? ha. good luck."]
+    },
+    tipPlace: {
+        up: ["{place} has been good to me lately, {name} - decent pickings.", "if you want loot, try {place}.", "found some nice bits round {place}. worth a look.", "{place}'s the spot, {name}. trust me.", "try {place}, it's been good to me.", "get to {place} before the crowds.", "{place}! good xp, good loot.", "you want {place}, {name}. brilliant there.", "i've done well in {place}, go see.", "{place} is a goldmine right now.", "give {place} a go, {name}.", "{place}'s where i got my best drops.", "honestly, {place}. you won't regret it.", "{place} treated me well, {name}.", "there's a good thing going in {place}.", "if you're stuck, {place}, {name}.", "{place}. lovely pickings.", "best spot lately? {place}, easily."],
+        neutral: ["{place} pays, if you're patient.", "keep {place} in mind, {name}. i've done well there.", "there's coin to be had in {place}.", "{place} is decent for it.", "try {place}, it's fine.", "{place} does alright.", "worth a look, {place}.", "{place} works, if you're patient.", "i'd try {place}, {name}.", "{place}'s not bad for it.", "you could do worse than {place}.", "{place}, maybe. it's steady.", "{place} has what you need, {name}.", "{place} is a fair spot.", "people do alright in {place}.", "{place}'s reliable.", "have a look at {place}.", "{place} pays, slowly."],
+        greedy: ["{place}. don't tell everyone, but it's rich.", "i've a good thing going in {place}. don't crowd me.", "{place} pays. keep it quiet.", "i've made a fortune in {place}.", "{place}. rich pickings, if you know how.", "there's gold in {place}, {name}. i know.", "{place}, and don't tell the others.", "want coin? {place}. you owe me one.", "{place}'s my little secret. was.", "best coin-per-hour is {place}.", "{place}. i've bled it dry, nearly.", "the money's in {place}, {name}.", "{place} is where the gold is.", "{place}. profit, pure and simple.", "i'll share {place}, but only with you.", "{place} made me what i am. rich.", "shh. {place}. loot.", "{place}. don't crowd my spot, mind."]
+    },
+    askSubject: {
+        warm: ["how's the {topic} going, {name}?", "{topic}, is it, {name}? how's that treating you?", "what level are you at with {topic}, {name}?", "any good spots for {topic}, {name}?", "you enjoying the {topic}, {name}?", "how's the {topic} treating you, {name}?", "still enjoying {topic}, {name}?", "any tips on {topic}, {name}?", "{topic}, eh? how far along are you?", "what got you into {topic}, {name}?", "{topic} going well, {name}?", "found a good spot for {topic}, {name}?", "how's your {topic} level, {name}?", "you're into {topic}? me too, a bit.", "{topic}! how's that going, {name}?", "much luck with {topic}, {name}?", "{topic}'s a good one. how's it going?", "is {topic} paying off, {name}?", "what's your goal with {topic}, {name}?", "tell me about the {topic}, {name}.", "you've been on {topic} a while, {name}?", "how'd the {topic} go today, {name}?"],
+        cheerful: ["ooh, {topic}! how's it going, {name}?", "{topic}, nice! getting anywhere with it?", "{name}! how's the {topic}?", "{topic}! brilliant, how's it going?", "ooh, {topic}. any luck, {name}?", "{topic}, is it? love it. how's it going?", "{topic}! tell me everything, {name}.", "ha, {topic}! going well?", "{name}, how's the {topic} coming?", "{topic}, nice! any levels?", "you and {topic}, {name}! how's that?", "ooh, {topic}! got any good spots?", "{topic}? fun! how's it treating you?", "how's the {topic}, {name}? good, i hope!", "{topic}! any big wins, {name}?", "{topic}, eh {name}? going great?", "nice, {topic}! how's it looking?", "ooh, {topic}. tell me it's going well!"],
+        neutral: ["{topic} today, {name}?", "how's {topic} paying, {name}?", "still {topic}, then?", "what are you at with {topic}, {name}?", "how's {topic} going?", "{topic}, is it?", "still at {topic}, {name}?", "much {topic} today?", "how's your {topic}, {name}?", "{topic} going alright?", "any luck with {topic}?", "{topic} today?", "{topic}, then. how is it?", "what level's your {topic}, {name}?", "{topic} treating you okay?", "doing {topic}, {name}?", "how's {topic} been?", "{topic}. going well?"]
+    },
+    recallSubject: {
+        warm: ["still on the {topic}, {name}?", "how did the {topic} go in the end, {name}?", "last time it was all {topic} with you, {name}. still?", "any luck with the {topic} since we spoke, {name}?", "how's that {topic} you mentioned, {name}?", "you were all about {topic} last time, {name}.", "did the {topic} work out, {name}?", "still chasing {topic}, {name}?", "last i heard it was {topic}. still, {name}?", "how'd the {topic} turn out, {name}?", "{topic} still on the go, {name}?", "any news on the {topic}, {name}?", "you were on {topic} when we last spoke, {name}.", "still on that {topic}, {name}? good for you.", "did you finish with the {topic}, {name}?", "how's the {topic} since last time, {name}?", "the {topic}, {name}. how's it going now?", "remember the {topic}, {name}? any progress?", "you get anywhere with the {topic}, {name}?", "how's your {topic} since we last chatted, {name}?"],
+        neutral: ["{topic} still, {name}?", "how's the {topic} coming along since last time?", "you were on {topic} last i saw you, {name}.", "still {topic}, then?", "how'd {topic} go?", "{topic} still on, {name}?", "{topic} again, {name}?", "any change with the {topic}?", "the {topic}. how'd it go?", "still doing {topic}, {name}?", "{topic} finished yet?", "how's {topic} now?", "{topic}, last time. and now?", "back on {topic}, {name}?", "the {topic} sorted?", "you still on {topic}?", "{topic}. any progress?", "still the {topic}, {name}?"]
     },
     // --- faction/social situations (dynamic) ---
     factionPride: {
-        cocky: ["{faction} runs this place.", "you're looking at {faction}, best crew around.", "nobody touches {faction}.", "{faction}, and don't you forget it.", "proud to fly with {faction}."],
-        warm: ["good to be one of {faction}.", "{faction}'s my family, truth be told.", "wouldn't trade {faction} for anything.", "we look after our own in {faction}."],
-        grim: ["{faction} sticks together, come what may.", "{faction}. we've been through it all.", "you don't leave {faction}. ever."],
-        neutral: ["i ride with {faction}.", "{faction}, that's my crew.", "one of {faction}, me.", "{faction} for life."]
+        cocky: ["{faction} runs this place.", "you're looking at {faction}, best crew around.", "nobody touches {faction}.", "{faction}, and don't you forget it.", "proud to fly with {faction}.", "{faction}. say it with respect.", "there's crews, and then there's {faction}.", "{faction} doesn't lose.", "you've heard of {faction}. everyone has.", "{faction} owns these roads.", "step aside for {faction}.", "nobody outfights {faction}.", "{faction}, and proud.", "{faction} sets the standard.", "the best walk with {faction}.", "{faction}'s the only crew that matters.", "you're lucky {faction} is friendly today.", "{faction}. top of the pile."],
+        warm: ["good to be one of {faction}.", "{faction}'s my family, truth be told.", "wouldn't trade {faction} for anything.", "we look after our own in {faction}.", "{faction}'s been good to me.", "i've found my people in {faction}.", "{faction}. good folk, all of them.", "proud to call {faction} mine.", "{faction} took me in when nobody would.", "there's no crew like {faction}.", "{faction}, through and through.", "i love this crew. {faction} forever.", "{faction} feels like home.", "you'd like {faction}, honestly.", "{faction}'s more than a crew to me.", "best thing i did was join {faction}.", "{faction}. my lot. my family.", "we're {faction}, and we're alright."],
+        grim: ["{faction} sticks together, come what may.", "{faction}. we've been through it all.", "you don't leave {faction}. ever.", "{faction}. we don't bend.", "{faction} remembers everything.", "we've buried friends for {faction}.", "{faction} endures. that's all.", "you cross {faction}, you cross all of us.", "{faction}. blood and loyalty.", "{faction} doesn't forgive easy.", "we stand or fall as {faction}.", "{faction}. we've seen it all.", "hard roads, harder crew. {faction}.", "nothing breaks {faction}.", "{faction} to the end.", "loyal to {faction}. always.", "{faction} keeps its oaths.", "for {faction}, whatever it takes."],
+        neutral: ["i ride with {faction}.", "{faction}, that's my crew.", "one of {faction}, me.", "{faction} for life.", "{faction}'s my lot.", "i'm with {faction}.", "part of {faction}, me.", "{faction}, that's us.", "{faction}, if you're asking.", "i run with {faction}.", "one of the {faction} crowd.", "{faction}. that's my crew.", "with {faction}, these days.", "{faction} member, me.", "you'll find me with {faction}.", "i'm {faction}, for what it's worth.", "{faction}. that's where i stand.", "belong to {faction}, i do."]
     },
     factionWarCry: {
-        cocky: ["{faction} will crush {enemy}!", "{enemy} don't stand a chance against {faction}.", "we'll wipe {enemy} off the map!", "for {faction}! death to {enemy}!"],
-        grim: ["it's {faction} or {enemy}. no quarter.", "this war with {enemy} ends in blood.", "{faction} holds the line against {enemy}.", "we bleed, but {faction} does not break."],
-        aggressive: ["kill for {faction}! hunt {enemy} down!", "to arms - {enemy} are near!", "{enemy} in the wild? cut them down for {faction}!"]
+        cocky: ["{faction} will crush {enemy}!", "{enemy} don't stand a chance against {faction}.", "we'll wipe {enemy} off the map!", "for {faction}! death to {enemy}!", "{enemy}? {faction} eats crews like that.", "{faction} will make {enemy} history.", "{enemy} should've stayed home. {faction}'s coming.", "watch {faction} roll over {enemy}.", "{enemy} against {faction}? it's already over.", "{faction} laughs at {enemy}.", "{enemy}'s finished. {faction} sees to it.", "no contest. {faction} over {enemy}.", "{enemy} can't touch {faction}.", "{faction} wins. {enemy} runs. as ever.", "one crew leaves this. {faction}.", "{enemy} picked a fight with {faction}. daft.", "{faction} breaks {enemy} today.", "{enemy} don't scare {faction}."],
+        grim: ["it's {faction} or {enemy}. no quarter.", "this war with {enemy} ends in blood.", "{faction} holds the line against {enemy}.", "we bleed, but {faction} does not break.", "{faction} against {enemy}. no end but one.", "we fight {enemy} because we must. for {faction}.", "{enemy} will bleed. so will {faction}. so be it.", "war with {enemy}. {faction} won't flinch.", "{faction} stands. {enemy} falls. or we do.", "there's no peace with {enemy}. {faction} knows.", "{faction} carries the dead into this war with {enemy}.", "{enemy} started it. {faction} ends it.", "blood for blood. {faction} vs {enemy}.", "{faction} does not yield to {enemy}.", "the line holds. {faction} holds it against {enemy}.", "{enemy} will learn what {faction} costs.", "hard days. {faction} against {enemy}.", "{faction} remembers what {enemy} did."],
+        aggressive: ["kill for {faction}! hunt {enemy} down!", "to arms - {enemy} are near!", "{enemy} in the wild? cut them down for {faction}!", "{enemy}! come out and fight {faction}!", "hunt {enemy}! for {faction}!", "{faction} wants {enemy} bones!", "find {enemy} and finish them! {faction}!", "{enemy} dies today! {faction}!", "no mercy for {enemy}! {faction} rides!", "{faction}! tear {enemy} apart!", "every {enemy} you see! {faction}!", "{enemy} on sight! for {faction}!", "{faction} strikes {enemy} first!", "charge {enemy}! {faction}!", "{enemy} blood for {faction}!", "hit {enemy} hard! {faction}!", "{faction}! to war with {enemy}!", "smash {enemy}! {faction} forever!"]
     },
     factionAllyGreet: {
-        warm: ["good to see {faction} - friends of ours.", "{faction}! well met, allies.", "always welcome, {faction}.", "stand with us, {faction}."],
-        neutral: ["{faction}, our allies. well met.", "friends of {faction} are friends of mine.", "good, {faction}'s here."]
+        warm: ["good to see {faction} - friends of ours.", "{faction}! well met, allies.", "always welcome, {faction}.", "stand with us, {faction}.", "{faction}! good to see friends.", "our friends {faction}. welcome.", "ah, {faction}. good people.", "{faction}, well met. how goes it?", "{faction}! we're glad you're here.", "good to have {faction} beside us.", "{faction}. always welcome at our fire.", "hello {faction}! friends indeed.", "{faction} and us, together again.", "well met, {faction}. we stand with you.", "{faction}! you're a welcome sight.", "our allies in {faction}. good day to you.", "{faction}, friends. good to see you well.", "always glad of {faction}."],
+        neutral: ["{faction}, our allies. well met.", "friends of {faction} are friends of mine.", "good, {faction}'s here.", "{faction}. allies. good.", "{faction}'s here. well met.", "well met, {faction}.", "{faction}, our friends.", "the allies, {faction}.", "{faction}. good to see you about.", "ah, {faction}. hello.", "{faction}. we're on the same side.", "{faction}, well met then.", "allies, {faction}. hello.", "good, {faction}'s about.", "{faction}. friends of the crew.", "friends. {faction}. good.", "greetings, {faction}.", "{faction}, allies of ours."]
     },
     gossipPraise: {
-        warm: ["{name}'s alright, they helped me out.", "you can trust {name}, good sort.", "{name}'s good people, that one.", "say what you like, {name}'s solid.", "i owe {name} one, decent of them."],
-        cocky: ["{name}? yeah, {name}'s sound.", "stick with {name}, you'll be fine.", "{name} knows what they're doing."],
-        neutral: ["heard {name}'s a good one.", "{name}'s dependable, they say.", "no complaints about {name}."]
+        warm: ["{name}'s alright, they helped me out.", "you can trust {name}, good sort.", "{name}'s good people, that one.", "say what you like, {name}'s solid.", "i owe {name} one, decent of them.", "{name} gave me food when i was low. good sort.", "{name}'s one of the good ones, honestly.", "you'll not find better than {name}.", "{name} helped me with a quest once. lovely.", "i'd trust {name} with my rune.", "{name}? heart of gold, that one.", "can't say a bad word about {name}.", "{name} always has a kind word.", "{name}'s straight as they come.", "if you need help, {name}'s the one.", "{name} looked out for me in the wild.", "good egg, {name}.", "{name} never let me down.", "everyone likes {name}, and rightly.", "{name}'s the sort you want beside you.", "{name} is decent. proper decent.", "i've a lot of time for {name}.", "top person, {name}.", "{name}'s alright by me."],
+        cocky: ["{name}? yeah, {name}'s sound.", "stick with {name}, you'll be fine.", "{name} knows what they're doing.", "{name}'s nearly as good as me. nearly.", "{name}'s sound. i'd know.", "{name} can hold their own, i'll give them that.", "{name}? decent. i've fought beside them.", "trust {name}. i do, and i trust nobody.", "{name}'s good. not me-good, but good.", "{name} knows the score.", "{name}'s one of the few i rate.", "{name}? solid. take it from me.", "{name} doesn't mess about.", "if i say {name}'s good, {name}'s good.", "{name} earns their keep.", "{name} could nearly keep up with me.", "{name}'s not bad at all.", "{name}. respect, from me. rare.", "{name}'s got it, whatever it is.", "{name}? proper player."],
+        neutral: ["heard {name}'s a good one.", "{name}'s dependable, they say.", "no complaints about {name}.", "{name}'s alright, from what i've seen.", "people speak well of {name}.", "{name}'s a decent sort.", "{name} seems fair enough.", "never heard a bad word about {name}.", "{name}'s reliable.", "you can count on {name}, they say.", "{name} does right by people.", "{name}'s fine. good, even.", "{name}'s trusted round here.", "{name} is okay in my book.", "{name}'s honest, at least.", "{name}, yeah, good sort.", "no trouble from {name}, ever.", "{name} helps out, i've noticed.", "{name}'s well thought of.", "{name}'s fine, honestly."]
     },
     gossipWarn: {
-        grim: ["watch out for {name}, bad news.", "steer clear of {name}, i'm telling you.", "{name} did me dirty. don't trust them.", "{name}'s trouble, mark my words."],
-        cocky: ["{name}? wouldn't trust them as far as i'd throw them.", "give {name} a wide berth.", "{name}'s all talk and worse."],
-        bitter: ["{name} crossed me. remember the name.", "{name}'s no good, and that's the truth.", "you'll regret trusting {name}."]
+        grim: ["watch out for {name}, bad news.", "steer clear of {name}, i'm telling you.", "{name} did me dirty. don't trust them.", "{name}'s trouble, mark my words.", "{name} will turn on you. seen it.", "don't trust {name}. i mean it.", "{name} left me to die once.", "{name} isn't what they seem.", "keep {name} at arm's length.", "{name}'s taken from better people than you.", "you'll learn about {name} the hard way, or listen to me.", "{name} is poison.", "i've seen what {name} does to friends.", "{name}. no. just no.", "trust {name} and you'll regret it.", "{name} has a dark side. i've seen it.", "watch {name}. always watch {name}.", "{name} smiles and then it's over.", "{name}'s cost people everything.", "don't turn your back on {name}."],
+        cocky: ["{name}? wouldn't trust them as far as i'd throw them.", "give {name} a wide berth.", "{name}'s all talk and worse.", "{name}? couldn't trust them to hold a bread.", "{name}'s a snake, and not a clever one.", "{name} talks big and does dirt.", "i wouldn't lend {name} a bone.", "{name}? liar. and bad at it.", "everyone knows {name}'s a wrong 'un.", "{name} cheats at trades. badly.", "steer clear of {name}, unless you like losing gear.", "{name}? all mouth, all trouble.", "{name} tried it on me. didn't work.", "{name}'s bad news, and not even interesting news.", "i've no time for {name}.", "{name} is a waste of a name.", "{name} scams. everyone knows.", "{name}? rubbish and dishonest.", "don't let {name} near your bank.", "{name}'s trouble in cheap armour."],
+        bitter: ["{name} crossed me. remember the name.", "{name}'s no good, and that's the truth.", "you'll regret trusting {name}.", "{name} took everything i had.", "i trusted {name}. never again.", "{name} lied to my face.", "{name} owes me and knows it.", "{name} is why i don't trust people.", "{name} stabbed me in the back. literally, nearly.", "ask {name} what happened to my rune.", "{name} ruined a good thing.", "i'll never forgive {name}.", "{name} did me wrong, plain and simple.", "{name} left me for dead.", "{name} isn't worth the breath.", "{name} scammed me. remember that.", "the less said about {name}, the better.", "{name}. don't. just don't.", "every time i hear {name}'s name, it burns.", "{name} made a fool of me once."]
     },
     titleBoast: {
-        cocky: ["they call me {title}, and rightly so.", "you're in the presence of {title}.", "{title} - earned every letter of it.", "i didn't get called {title} for nothing.", "yeah, {title}. that's me."],
-        warm: ["folk know me as {title} these days.", "i'm {title}, for my sins.", "{title}, if you can believe it."],
-        neutral: ["they name me {title}.", "i go by {title} now.", "{title} - that's the name i carry."]
+        cocky: ["they call me {title}, and rightly so.", "you're in the presence of {title}.", "{title} - earned every letter of it.", "i didn't get called {title} for nothing.", "yeah, {title}. that's me.", "you may call me {title}.", "{title}. yes, that {title}.", "some earn a name. i earned {title}.", "{title} - and it's not for show.", "{title}, at your service. sort of.", "when they say {title}, they mean me.", "bow, if you like. it's {title}.", "{title}. remember it.", "i'm {title}, and you're not.", "the name's {title}. earned it.", "{title}. the one and only.", "not many get called {title}.", "{title}. you've heard it right."],
+        warm: ["folk know me as {title} these days.", "i'm {title}, for my sins.", "{title}, if you can believe it.", "they call me {title}, bless them.", "{title}, apparently. i'll take it.", "{title}. didn't ask for it, but here we are.", "friends call me {title}.", "i'm {title} now, if you can credit it.", "it's {title}, but you can call me anything.", "{title}, for what it's worth.", "{title}. it's a bit much, but i like it.", "they gave me {title}. kind of them.", "{title}, so they say. i'm just me.", "you can call me {title}, everyone does.", "{title}. it's grown on me.", "i answer to {title} these days.", "{title}. it's a good name to carry.", "{title}, though i still feel like a newbie."],
+        neutral: ["they name me {title}.", "i go by {title} now.", "{title} - that's the name i carry.", "the name's {title}.", "{title}. that's me.", "i'm known as {title}.", "{title}, if you're asking.", "{title} is what they call me.", "they say {title}.", "{title}. it's the name that stuck.", "you'll have heard of {title}. that's me.", "{title}, around here.", "i carry the name {title}.", "i'm {title}, more or less.", "{title}. earned or not, it's mine.", "call me {title}.", "{title}, they call me.", "{title}'s the name."]
     },
     legendMention: {
-        warm: ["you hear about {name}? proper legend.", "everyone's talking about {name} these days.", "they say {name}'s the real thing.", "one day they'll speak of me like {name}."],
-        cocky: ["{name}? now THAT'S a name.", "even i'd tip my hat to {name}.", "{name}'s made a name, i'll give them that."],
-        neutral: ["heard the stories about {name}?", "{name}'s got quite the reputation.", "the tales about {name} get taller every day."]
+        warm: ["you hear about {name}? proper legend.", "everyone's talking about {name} these days.", "they say {name}'s the real thing.", "one day they'll speak of me like {name}.", "{name}'s a hero to a lot of us.", "i met {name} once. lovely, and terrifying.", "stories about {name} get better every telling.", "i'd love to be spoken of like {name}.", "{name} did it right, whatever they did.", "you know {name}? everyone should.", "there's {name}, and then there's the rest of us.", "hats off to {name}, honestly.", "{name}'s made something of themselves.", "you hear what {name} did? incredible.", "we'll be telling {name} stories for years.", "{name} showed it can be done.", "one day, {name}. one day i'll get there too.", "{name}'s the real deal, no question."],
+        cocky: ["{name}? now THAT'S a name.", "even i'd tip my hat to {name}.", "{name}'s made a name, i'll give them that.", "{name}'s good. i'm better, but they're good.", "{name} and me, we'd be a match.", "{name}? fine. not unbeatable.", "everyone goes on about {name}. fair enough.", "{name}'s earned the name, i'll allow it.", "even {name} had to start somewhere.", "{name}'s a legend. i'm a legend in waiting.", "i'd shake {name}'s hand. then fight them.", "{name}? big name. big target.", "{name}'s done well. so will i.", "they talk about {name}. they'll talk about me.", "{name}'s good. i'd still have a go.", "grudging respect for {name}. grudging.", "{name}? not bad. not bad at all.", "{name}'s made it. now, my turn."],
+        neutral: ["heard the stories about {name}?", "{name}'s got quite the reputation.", "the tales about {name} get taller every day.", "{name}'s a big name these days.", "you've heard of {name}, surely.", "{name} is known all over.", "everyone talks about {name}.", "{name}'s reputation goes before them.", "there's talk of {name} everywhere.", "{name}. quite the legend.", "they say {name} is the best.", "{name}, the one from the stories.", "{name}'s name comes up a lot.", "big stories about {name}.", "{name}'s well known round here.", "{name}. you'll have heard.", "{name}'s famous, more or less.", "the name {name} gets around."]
     },
     reactWarNews: {
-        eager: ["war?! now it gets interesting.", "a proper war? i want to see this.", "blood in the water - about time.", "ha! this'll be worth watching."],
-        grim: ["war. nothing good comes of it.", "here we go. more blood.", "war again? this place never learns.", "grim days ahead, then."],
-        neutral: ["war, is it? word travels fast.", "so it's come to war.", "everyone's talking about the war now.", "a war breaking out - you don't say."]
+        eager: ["war?! now it gets interesting.", "a proper war? i want to see this.", "blood in the water - about time.", "ha! this'll be worth watching.", "a war! finally, something to do.", "sharpen the scimmy, then.", "let's see who's got the nerve.", "war's the best kind of news.", "oh, this'll be good.", "sign me up, i'm in.", "now the fun starts.", "who's fighting? i want a front seat.", "war! brilliant! let's go!", "about time something kicked off.", "someone's getting hurt. good.", "this is what i've been waiting for.", "war? bring it on.", "let's have some blood, then."],
+        grim: ["war. nothing good comes of it.", "here we go. more blood.", "war again? this place never learns.", "grim days ahead, then.", "people will die for nothing again.", "war. and for what.", "and the graves fill up.", "here we go. same as last time.", "nobody wins a war. not really.", "another war. another loss.", "the young ones always pay.", "war's an ugly word.", "so it's blood again.", "we've been here before, and it wasn't good.", "grim. just grim.", "nothing good from war. nothing.", "mark my words, we'll regret it.", "so the killing starts."],
+        neutral: ["war, is it? word travels fast.", "so it's come to war.", "everyone's talking about the war now.", "a war breaking out - you don't say.", "war, eh. heard about that.", "so there's a war on.", "there's talk of war.", "war? hm. right.", "so that's happening.", "word is there's a war.", "a war. well.", "that's the big news, then.", "hearing about the war.", "so it's war, then.", "war's the talk today.", "everyone's on about the war.", "a war's started, apparently.", "war. hm."]
     },
     reactFactionFall: {
-        grim: ["gone, just like that. end of an era.", "so they're finished. sad, that.", "a whole crew, wiped out. tough world.", "pour one out for them."],
-        cocky: ["finished? knew they wouldn't last.", "saw that coming a mile off.", "one less crew to worry about."],
-        neutral: ["they've disbanded? word gets around.", "so that's the end of them.", "another crew falls. it happens."]
+        grim: ["gone, just like that. end of an era.", "so they're finished. sad, that.", "a whole crew, wiped out. tough world.", "pour one out for them.", "gone. a whole crew, gone.", "that's how it ends for most of us.", "one day it'll be my crew.", "all those people. scattered.", "sad to see any crew go under.", "they had good people. it's a shame.", "end of the road for them.", "that's a bit of history gone.", "nothing lasts out here.", "hard to watch a crew fall.", "another one for the memory.", "they deserved better than that.", "a bad day for somebody.", "and the world moves on. cold."],
+        cocky: ["finished? knew they wouldn't last.", "saw that coming a mile off.", "one less crew to worry about.", "weak crews fall. that's the rule.", "told you they were done.", "no surprise there.", "good riddance, frankly.", "that's what happens to soft crews.", "ha. thought they'd last longer. no i didn't.", "one less. plenty to go.", "shame. not really.", "they weren't built to last.", "predictable. very.", "another lot bites the dust.", "couldn't cut it.", "they had it coming.", "not a great loss.", "and there they go."],
+        neutral: ["they've disbanded? word gets around.", "so that's the end of them.", "another crew falls. it happens.", "disbanded, then.", "heard they've broken up.", "so they're finished.", "that crew's gone.", "no more of them.", "word is they've folded.", "they're done, then.", "that's the end of that lot.", "they've split up, i hear.", "gone. huh.", "so that's over.", "they didn't last.", "another crew finished.", "crews come and go.", "so it goes."]
     },
     // --- life reflection: a bot musing on its own long story ---
     reflectJourney: {
-        warm: ["started with nothing, look at me now.", "long road, this. glad i walked it.", "hard to believe how far i've come.", "every scar tells a story, and i've plenty.", "not bad, for someone who started in the dirt."],
-        weary: ["long road it's been. i'm tired, if i'm honest.", "seen too much, some days.", "the years catch up with you out here.", "started so eager. funny how it wears you down."],
-        neutral: ["been at this a long while now.", "the map and me, we've history.", "i've walked every road twice over.", "who'd have thought i'd last this long."]
+        warm: ["started with nothing, look at me now.", "long road, this. glad i walked it.", "hard to believe how far i've come.", "every scar tells a story, and i've plenty.", "not bad, for someone who started in the dirt.", "bronze sword to rune. quite a road.", "i remember being scared of goblins.", "i've made friends i'd not trade for gold.", "the kid who started this would be proud.", "so many roads, so many faces.", "from lumbridge to here. blimey.", "i've had a good run, really.", "i've seen most of the map now.", "the old days were rough, but good.", "i'd do it all again.", "first level felt like everything. still does.", "look at all i've done. look at it.", "started with bread. now it's lobsters.", "every level a memory.", "i wouldn't change the road i took."],
+        weary: ["long road it's been. i'm tired, if i'm honest.", "seen too much, some days.", "the years catch up with you out here.", "started so eager. funny how it wears you down.", "i'm old for this game.", "the map's the same, but i'm not.", "a long time on the road.", "the years, they pile up.", "some days i just want to sit down.", "i've walked too far, seen too much.", "everything hurts these days.", "i wonder if it was worth it.", "the young ones don't know how tired you get.", "i've buried friends out here.", "so many miles. so little rest.", "tired to my bones, and still walking.", "the road doesn't get shorter.", "there's not much left of the fire in me."],
+        neutral: ["been at this a long while now.", "the map and me, we've history.", "i've walked every road twice over.", "who'd have thought i'd last this long.", "i've been about a bit.", "a lot of history on this map.", "there's been ups and downs.", "i've done most things once.", "quite a history, mine.", "years in, and still here.", "i've seen a lot, that's all.", "the road's been long.", "been at this since the start.", "a lot of levels behind me now.", "i've got stories, put it that way.", "i've walked far, fought hard.", "not a short road, mine.", "i've been playing this a while."]
     },
     reflectFriend: {
-        warm: ["me and {name}, we go way back.", "{name}'s stuck by me through it all.", "don't know where i'd be without {name}.", "a friend like {name} is worth more than gold."],
-        neutral: ["{name} and i have seen some things.", "good to have {name} around, all these years.", "{name}. now there's a true friend."]
+        warm: ["me and {name}, we go way back.", "{name}'s stuck by me through it all.", "don't know where i'd be without {name}.", "a friend like {name} is worth more than gold.", "{name} saved my skin more than once.", "{name}'s the one i'd call, always.", "we've been through the wild together, {name} and i.", "{name} was there when nobody else was.", "i'd give {name} my last lobster.", "friends like {name} don't come twice.", "{name} and me. that's a proper friendship.", "if i've done anything right, it's {name}.", "{name}'s family, near enough.", "i owe {name} more than i can say.", "every good story i've got has {name} in it.", "{name} knows me better than i do.", "{name}'s been there from the start.", "wouldn't be here without {name}."],
+        neutral: ["{name} and i have seen some things.", "good to have {name} around, all these years.", "{name}. now there's a true friend.", "{name} and me go back.", "{name}'s been a good friend, all told.", "known {name} a long time.", "{name}'s always been there.", "{name}. good friend, that.", "me and {name}, we've history.", "{name}'s stuck around, i'll say that.", "{name}'s been part of it all along.", "{name}, my oldest friend.", "{name}'s reliable, always has been.", "long friendship, me and {name}.", "{name}'s been a constant.", "{name}. good one to have.", "not many like {name}.", "{name}'s been there through the lot."]
     },
     reflectRival: {
-        bitter: ["{name} and i still have a score to settle.", "one day i'll finish it with {name}.", "i haven't forgotten you, {name}. i never will.", "there's no peace between me and {name}."],
-        cocky: ["{name} still thinks they can best me. cute.", "{name}'ll get theirs. mark it.", "me and {name}? that's not over."],
-        neutral: ["{name} and i, we're not done.", "still no love lost between me and {name}."]
+        bitter: ["{name} and i still have a score to settle.", "one day i'll finish it with {name}.", "i haven't forgotten you, {name}. i never will.", "there's no peace between me and {name}.", "{name}. the name still stings.", "i'll settle with {name} one day.", "{name} thinks it's over. it isn't.", "every day i think of {name}, and not kindly.", "{name} and i will meet again.", "there's a debt between me and {name}.", "{name} owes me blood.", "i sleep worse for {name}.", "{name}'s the one wrong i can't let go.", "i'd give a lot to face {name} again.", "{name}. unfinished. always.", "not a day passes i don't think of {name}.", "i carry {name} around like a stone.", "{name} started it. i'll end it."],
+        cocky: ["{name} still thinks they can best me. cute.", "{name}'ll get theirs. mark it.", "me and {name}? that's not over.", "{name}? still coming second.", "{name} keeps trying. bless.", "one day {name} will learn. probably not.", "{name} calls it a rivalry. i call it practice.", "{name} needs me more than i need them.", "{name} hasn't beaten me yet. won't, either.", "my rival, {name}. their word, not mine.", "{name} keeps score. i just win.", "{name}'ll come round for another beating, eventually.", "{name}'s the closest thing to competition i've got.", "rival? {name}? cute.", "let {name} keep dreaming.", "{name}'s good. i'm better. that's the story.", "{name} and i? entertainment, mostly.", "{name} thinks it's close. it isn't."],
+        neutral: ["{name} and i, we're not done.", "still no love lost between me and {name}.", "{name}'s a thorn in my side, still.", "me and {name} have history.", "there's bad blood with {name}.", "{name}. not a friend.", "{name} and i don't see eye to eye.", "still at odds with {name}.", "{name}'s my rival, more or less.", "{name} and me. it's complicated.", "no resolution with {name} yet.", "{name}'s still out there.", "{name}. we'll see.", "old rivalry, me and {name}.", "{name} and i, unfinished business.", "{name}'s not forgotten.", "there's a score with {name}.", "{name}. it goes on."]
     },
     reflectDream: {
-        warm: ["one day i'll get there - {topic}.", "still chasing {topic}. i'll make it.", "i can almost taste it - {topic}.", "everything i do is for {topic}."],
-        weary: ["{topic}. feels further off some days.", "still no closer to {topic}. but i keep on.", "chasing {topic}. maybe i always will be."],
-        neutral: ["{topic}. that's what keeps me going.", "i've a dream, you know - {topic}.", "it's all for {topic}, in the end."]
+        warm: ["one day i'll get there - {topic}.", "still chasing {topic}. i'll make it.", "i can almost taste it - {topic}.", "everything i do is for {topic}.", "{topic}. that's the dream.", "when i get {topic}, i'll rest. maybe.", "i think about {topic} every day.", "{topic}. it's closer than it was.", "one day, {topic}. i can see it.", "{topic}. that's why i get up.", "not there yet, but {topic} is coming.", "{topic}. worth every coal.", "i'll get {topic}, and then i'll smile.", "{topic}. it keeps me warm at night.", "all this grind is for {topic}.", "{topic}. i believe in it.", "dreaming of {topic}, always.", "{topic}. that's the prize."],
+        weary: ["{topic}. feels further off some days.", "still no closer to {topic}. but i keep on.", "chasing {topic}. maybe i always will be.", "{topic}. still waiting.", "{topic} feels like a joke some days.", "will i ever see {topic}? honestly?", "{topic}. i've stopped counting the days.", "{topic}'s a long way off. always was.", "maybe {topic} isn't for me.", "{topic}. one day. or not.", "tired of chasing {topic}, but what else.", "{topic}. dreams cost a lot.", "some nights {topic} feels impossible.", "{topic}. don't ask me when.", "i'm not sure {topic} was ever real.", "still {topic}. still far.", "{topic}. i keep on. that's all i can say.", "{topic}'s the dream. the road's the problem."],
+        neutral: ["{topic}. that's what keeps me going.", "i've a dream, you know - {topic}.", "it's all for {topic}, in the end.", "{topic}. that's the goal.", "working toward {topic}.", "{topic}, eventually.", "i'm after {topic}.", "the aim is {topic}.", "{topic}. that's the plan.", "{topic}, if things go right.", "still aiming for {topic}.", "{topic}. getting there.", "everything points to {topic}.", "{topic}. some day.", "{topic}'s what i'm after.", "the long game is {topic}.", "{topic}. one step at a time.", "{topic}. that's the idea."]
     },
     grieveFriend: {
-        grim: ["no... {name}. not {name}.", "they got {name}. i can't believe it.", "{name}'s gone. a good friend, gone.", "why {name}? of all people...", "rest easy, {name}. you deserved better."],
-        bitter: ["whoever did this to {name} will pay.", "{name}... i'll avenge you, i swear it.", "they'll answer for {name}. i'll see to it."],
-        neutral: ["{name} down. this world takes the best of us.", "so long, {name}. you were one of the good ones."]
+        grim: ["no... {name}. not {name}.", "they got {name}. i can't believe it.", "{name}'s gone. a good friend, gone.", "why {name}? of all people...", "rest easy, {name}. you deserved better.", "{name}... no.", "not {name}. anyone but {name}.", "{name}'s gone and the world's smaller.", "i should have been there for {name}.", "{name} didn't deserve that.", "the best of us, {name}. gone.", "i can't take {name} being gone.", "goodbye, {name}. i'm sorry.", "{name}. i'll carry that.", "it's too quiet without {name}.", "{name}. why {name}.", "i'll never hear {name} laugh again.", "{name}'s gone. i'm not okay."],
+        bitter: ["whoever did this to {name} will pay.", "{name}... i'll avenge you, i swear it.", "they'll answer for {name}. i'll see to it.", "someone's paying for {name}.", "i'll find who did this to {name}.", "{name} died and someone smiled. not for long.", "i'll not rest until {name}'s avenged.", "mark it: {name} will be answered for.", "whoever took {name} took the wrong one.", "{name}'s blood is on someone. i'll find them.", "for {name}, i'll do things i'm not proud of.", "there'll be a reckoning for {name}.", "they took {name}. i'll take more.", "{name}. remember the name. they'll wish they had.", "i'll make them wish they'd left {name} alone.", "this doesn't end. not for {name}.", "vengeance for {name}, and soon.", "{name}'s killer walks. not for long."],
+        neutral: ["{name} down. this world takes the best of us.", "so long, {name}. you were one of the good ones.", "{name}'s gone. hard to believe.", "lost {name} today.", "{name}. rest now.", "{name} won't be coming back.", "one of the good ones, {name}.", "{name} fell. it happens. still hurts.", "goodbye, {name}.", "{name}'s dead. that's the news.", "we lost {name}.", "{name}. gone, just like that.", "i'll miss {name}.", "{name}. it's a loss.", "so that's {name} gone.", "bad day. {name}'s gone.", "{name}. rest easy.", "there goes {name}."]
     },
     marketCry: {
-        cocky: ["{item}! {price} coins, and you won't find better.", "best {item} on the map - {price} each!", "roll up, {item} going for {price}!", "{price} for {item}? a steal, and you know it.", "best {item} on the map, right here!", "you won't find a better {item} at this price!", "come on, {name}, you know you want it."],
-        eager: ["{item} for sale! only {price}!", "who wants {item}? {price} coins!", "fresh {item}, {price} the lot!", "selling {item} - {price}, come and get it!", "selling {item}! good price!", "who wants a {item}? {price} coins!", "fresh {item}, get it while it's here!"],
-        neutral: ["{item}, {price} coins.", "got {item} going, {price} each.", "{item} for sale here, {price}.", "anyone need {item}? {price}.", "{item} for sale, {price} coins.", "anyone need a {item}?", "selling {item}, make me an offer."]
+        cocky: ["{item}! {price} coins, and you won't find better.", "best {item} on the map - {price} each!", "roll up, {item} going for {price}!", "{price} for {item}? a steal, and you know it.", "best {item} on the map, right here!", "you won't find a better {item} at this price!", "come on, {name}, you know you want it.", "{item} at {price}, cheapest on the map!", "you'll not beat {price} for {item}.", "{price} for a {item}? i'm practically giving it away.", "quality {item}, {price}. no rubbish.", "{name}, {price} for {item}. you're welcome.", "top {item}, {price}. take it or regret it.", "{item} here, {price}! don't dawdle.", "nobody sells {item} like me. {price}.", "{item}, {price}. cheap at twice the price.", "i've the best {item} in town. {price}.", "{price}! for {item}! what are you waiting for?", "{item} for {price}. bargain of the year.", "everyone's buying my {item} at {price}.", "{item}, {price}. i'll not go lower.", "{name}, you need my {item}. {price}."],
+        eager: ["{item} for sale! only {price}!", "who wants {item}? {price} coins!", "fresh {item}, {price} the lot!", "selling {item} - {price}, come and get it!", "selling {item}! good price!", "who wants a {item}? {price} coins!", "fresh {item}, get it while it's here!", "{item}! {item}! {price}!", "get your {item}, {price} a go!", "{item} here! {price}! fresh in!", "who's buying {item}? {price}!", "{item}, {price}! going fast!", "{price} for {item}, come on!", "selling {item} at {price}, quick!", "{item}, {price}! roll up!", "{item}! lovely {item}! {price}!", "come get {item}, {price}!", "{item} going for {price}! now!", "{price} the {item}, last few!", "fresh {item}! {price}!", "{item} for sale, {price}, hurry!", "{name}! {item}! {price}!"],
+        neutral: ["{item}, {price} coins.", "got {item} going, {price} each.", "{item} for sale here, {price}.", "anyone need {item}? {price}.", "{item} for sale, {price} coins.", "anyone need a {item}?", "selling {item}, make me an offer.", "{item}, {price}, if anyone wants.", "selling {item}. {price}.", "got {item} for {price}.", "{item} available. {price}.", "{price} for {item}. offers?", "{item} here, {price}.", "anyone buying {item}? {price}.", "selling {item}, {price} each.", "{item} going at {price}.", "{item} - {price}.", "have {item}, want {price}.", "{item} for {price}, {name}?", "{price} gets you {item}.", "{item}, {price}. that's the price.", "selling a {item} for {price}."]
     },
     // a bot voicing what it's off to do now ({topic} = a plain phrase)
     announceIntent: {
-        eager: ["right, {topic}. let's get to it.", "off to {topic}, me.", "time to {topic}.", "{topic} - no time like the present.", "right, off to make some coin.", "time to hit the mines.", "let's get some levels in.", "fancy a fight. off i go.", "adventure calls!"],
-        neutral: ["think i'll {topic}.", "reckon it's time to {topic}.", "{topic}, then. that's the plan.", "suppose i'd best {topic}.", "off to the bank.", "going to get supplies.", "heading out for a bit.", "back to work.", "time to move on."],
-        weary: ["back to it, i s'pose - {topic}.", "{topic} again. no rest for the likes of us.", "may as well {topic}.", "suppose i'd better get on with it.", "one more trip, then a rest.", "back to the grind, then.", "no rest for the wicked."]
+        eager: ["right, {topic}. let's get to it.", "off to {topic}, me.", "time to {topic}.", "{topic} - no time like the present.", "right, off to make some coin.", "time to hit the mines.", "let's get some levels in.", "fancy a fight. off i go.", "adventure calls!", "right, {topic}! let's go.", "can't wait to {topic}.", "{topic}. now that's a plan.", "off i go to {topic}!", "time to {topic}, and no delay.", "let's {topic}, then!", "{topic} - right up my street.", "i'm going to {topic}, and it'll be great.", "{topic}! brilliant idea, me.", "now then, {topic}!", "off to the wildy!", "time to fight something.", "lobsters await. off i go.", "let's go make some xp.", "chickens, watch out.", "coal won't mine itself. off!", "right, the dwarven mine it is!"],
+        neutral: ["think i'll {topic}.", "reckon it's time to {topic}.", "{topic}, then. that's the plan.", "suppose i'd best {topic}.", "off to the bank.", "going to get supplies.", "heading out for a bit.", "back to work.", "time to move on.", "going to {topic}.", "off to {topic}, then.", "i'll {topic} for a bit.", "right, {topic}.", "{topic}, i think.", "might {topic}.", "best go {topic}.", "off i go to {topic}.", "{topic} next.", "think i'll go {topic}.", "time to {topic}.", "off to the mines.", "back to the bank.", "off to varrock.", "going to fish for a bit.", "bit of woodcutting, i think.", "off to lumbridge."],
+        weary: ["back to it, i s'pose - {topic}.", "{topic} again. no rest for the likes of us.", "may as well {topic}.", "suppose i'd better get on with it.", "one more trip, then a rest.", "back to the grind, then.", "no rest for the wicked.", "suppose i'll {topic}.", "{topic}. again. fine.", "might as well {topic}, nothing else on.", "{topic}. it's not going to do itself.", "off to {topic}, dragging my feet.", "{topic}. sigh.", "guess i'll {topic}.", "one more go at it, then a rest.", "back to the rocks.", "off to sleep, then work.", "the grind calls. quietly.", "may as well be useful.", "{topic}, if i must.", "right. back to it.", "time for the sleeping bag first, then {topic}."]
     },
     // a rogue's quiet aside as it works a mark ({name})
     thieve: {
-        cocky: ["{name} won't miss a few coins.", "too easy - never even felt it.", "light fingers, me. always have been.", "a purse here, a purse there - it adds up."],
-        neutral: ["just a little off the top of {name}.", "they won't miss what they don't count.", "quiet now - eyes on {name}.", "old habits, hard to break."],
-        weary: ["a rogue's got to eat too.", "not proud of it, but coin's coin.", "one for me, none for {name}."]
+        cocky: ["{name} won't miss a few coins.", "too easy - never even felt it.", "light fingers, me. always have been.", "a purse here, a purse there - it adds up.", "{name}'s pockets are practically open.", "watch the hands. no, don't.", "{name} won't notice a thing.", "the trick is to smile while you do it.", "a rogue's best friend is a distracted {name}.", "one coin at a time. mine now.", "{name}'s got more than they need.", "i'm just redistributing, really.", "thief? i prefer collector.", "{name}, you make it too easy.", "a light touch and a lighter {name}.", "there's an art to it. i'm the artist.", "{name} keeps looking the wrong way. lovely.", "clean as anything."],
+        neutral: ["just a little off the top of {name}.", "they won't miss what they don't count.", "quiet now - eyes on {name}.", "old habits, hard to break.", "just a bit from {name}.", "borrowing, from {name}.", "{name} won't miss it.", "keep the hands quick.", "a coin or two off {name}.", "nobody looking. good.", "{name}'s bag is heavy. let's fix that.", "quietly does it.", "in and out of {name}'s purse.", "just a touch from {name}.", "easy pickings, {name}.", "steady. steady. got it.", "another for the rogue's purse.", "{name}. distracted. good."],
+        weary: ["a rogue's got to eat too.", "not proud of it, but coin's coin.", "one for me, none for {name}.", "needs must.", "not my proudest moment, {name}.", "a coin's a coin, even a pinched one.", "someday i'll stop. not today.", "sorry, {name}. sort of.", "the bank doesn't ask where it came from.", "it's a living. barely.", "old habits.", "don't look at me like that, {name}.", "the wildy's worse, so.", "tired, hungry, and nicking from {name}.", "i'd rather earn it. i would.", "a bit off {name}. no pride in it.", "it feeds me, that's all.", "another day, another pinch."]
     },
     // one bot in a crowd acknowledges the throng (only sometimes, one at a time)
     crowd: {
-        neutral: ["busy round here today.", "lot of us about, eh?", "quite the crowd gathered here.", "never a quiet moment in this spot.", "everyone's had the same idea, it seems.", "bit of a queue, this.", "everyone had the same idea, then.", "mind your elbows."],
-        warm: ["good to have a bit of company out here.", "nice to see a few friendly faces about.", "always better with folk around, isn't it?", "grand to share the spot with you all.", "good to see so many faces.", "the more the merrier, i suppose.", "hello all! room for one more?"],
-        wry: ["getting crowded - save some for the rest of us!", "can't move for bodies round here.", "popular spot, this. too popular.", "elbow room's a luxury today, eh?", "popular spot. who knew.", "shall we take turns, or just shove?", "i love a crowd. said no one."]
+        neutral: ["busy round here today.", "lot of us about, eh?", "quite the crowd gathered here.", "never a quiet moment in this spot.", "everyone's had the same idea, it seems.", "bit of a queue, this.", "everyone had the same idea, then.", "mind your elbows.", "half the world's here today.", "crowded, this.", "everyone came to the same rock.", "standing room only.", "plenty of us about.", "busy, busy.", "a lot of faces today.", "is there a queue, or do we just scrum?", "the whole town's out.", "seems everyone's here.", "quite the gathering.", "lot of company today.", "always busy here.", "packed out, this.", "a fair few of us, then.", "not much room to swing a pick.", "you'd think it was free lobsters.", "the crowd's out today."],
+        warm: ["good to have a bit of company out here.", "nice to see a few friendly faces about.", "always better with folk around, isn't it?", "grand to share the spot with you all.", "good to see so many faces.", "the more the merrier, i suppose.", "hello all! room for one more?", "nice to see everyone out.", "a good crowd, this.", "lovely to have so many about.", "the more faces the better.", "good company all round today.", "nice to be among people.", "a crowd's a comfort, out here.", "hello, all. good to see a crowd.", "everyone's here! lovely.", "full house. i like it.", "good to be part of a crowd.", "nice, busy, friendly. my favourite.", "what a cheerful lot.", "you're all welcome at my rock.", "good to see so many of us.", "it's like a fair today.", "warm spot, warm crowd."],
+        wry: ["getting crowded - save some for the rest of us!", "can't move for bodies round here.", "popular spot, this. too popular.", "elbow room's a luxury today, eh?", "popular spot. who knew.", "shall we take turns, or just shove?", "i love a crowd. said no one.", "did someone announce free rune?", "we'll all need bigger elbows.", "cosy, isn't it.", "any more of us and the ground'll give.", "quiet spot, my foot.", "everyone had my idea. typical.", "i came for peace. got a queue.", "it's a party and no one told me.", "shoulder to shoulder. lovely.", "you'd get more space in a bank vault.", "half these people are in my way.", "ah, the crowd. always the crowd.", "somebody's stood on my foot. metaphorically.", "the secret spot's not a secret, then.", "great. company.", "nothing like sharing one rock with twenty people.", "a crowd. how unexpected. it isn't."]
     },
     // a bot that just brought down a boss shouts it to the world (spreads as news)
     bossKill: {
-        cocky: ["i've slain {foe}! did you SEE that?!", "{foe} is DEAD - and i'm the one who did it!", "they said {foe} couldn't be beaten. they were wrong.", "put it in the tales: i killed {foe}!"],
-        proud: ["i brought down {foe} with my own hands.", "{foe} falls at last. what a fight that was.", "i'll remember this day - the day i felled {foe}.", "i actually did it. i killed {foe}."],
-        wry: ["well. {foe} won't be getting up again.", "one dead {foe}, courtesy of yours truly.", "{foe} picked the wrong day to meet me."]
+        cocky: ["i've slain {foe}! did you SEE that?!", "{foe} is DEAD - and i'm the one who did it!", "they said {foe} couldn't be beaten. they were wrong.", "put it in the tales: i killed {foe}!", "{foe}? dead. next question.", "they'll write songs about this. i'll help.", "{foe} met me. it went badly. for {foe}.", "big monster, bigger me.", "another legend for the pile. {foe} down!", "tell everyone: {foe} is DONE.", "and {foe} thought it was scary.", "{foe}, slain, by yours truly.", "the mighty {foe}. not so mighty now.", "nobody else could. i did. {foe}!", "{foe} is dead. remember the name. mine.", "did anyone doubt me? {foe}'s gone.", "{foe} was a warm-up.", "i've killed {foe}. what have you done today?"],
+        proud: ["i brought down {foe} with my own hands.", "{foe} falls at last. what a fight that was.", "i'll remember this day - the day i felled {foe}.", "i actually did it. i killed {foe}.", "{foe}. down. i did that.", "years of work and {foe} falls. worth it.", "i can hardly believe it. {foe}!", "never thought i'd beat {foe}.", "{foe} is beaten. i'm shaking.", "the day i killed {foe}. that's today.", "i'll tell my grandkids about {foe}.", "{foe}, fallen. proud doesn't cover it.", "i stood up to {foe} and won.", "all those lobsters. {foe}'s dead.", "{foe} is gone and i did it. me.", "a hard fight, {foe}. a good one.", "i'll carry this one. {foe}.", "{foe}. done. what a feeling."],
+        wry: ["well. {foe} won't be getting up again.", "one dead {foe}, courtesy of yours truly.", "{foe} picked the wrong day to meet me.", "{foe} had a bad day. i had a good one.", "{foe} won't be needing its lair.", "someone tell {foe}'s mates it's over.", "well, that's {foe} dealt with.", "one {foe}, slightly deceased.", "{foe}. i'd say rest in peace, but no.", "turns out {foe} bleeds. lots.", "{foe} down. tea time.", "so much for the terrible {foe}.", "{foe} has been, shall we say, retired.", "i'd apologise to {foe}, but it's dead.", "and that's {foe} sorted. anyone else?", "{foe} put up a fight. briefly.", "not bad for a morning. {foe}, dead.", "the {foe} problem is solved."]
     },
     // an ambitious bot calls out a famous name to make its own
     challengeFamous: {
-        cocky: ["so you're the great {name}? you don't scare me.", "they all fear {name}. i don't.", "beating {name} - now THAT would be a story.", "{name}'s reputation ends the day it meets me."],
-        hungry: ["i'll make my name on you, {name}.", "everyone knows {name}. soon they'll know the one who beat them.", "your legend's about to get a new ending, {name}.", "time someone took {name} down a peg."],
-        cold: ["a big name makes a big target, {name}.", "fame won't save you from me, {name}."]
+        cocky: ["so you're the great {name}? you don't scare me.", "they all fear {name}. i don't.", "beating {name} - now THAT would be a story.", "{name}'s reputation ends the day it meets me.", "{name}, is it? i've heard enough.", "come on then, {name}. show me.", "everyone talks about {name}. i'll talk to {name}.", "the mighty {name}. let's test that.", "{name}'s legend meets its end today.", "i'll fight {name} and win.", "{name}? overdue a loss.", "i'm not here to admire {name}. i'm here to beat them.", "{name}, your name's about to be mine.", "let's see if {name} is all they say.", "{name} hasn't met me. that changes now.", "i'll take {name}'s fame, thanks.", "time the great {name} lost.", "{name}. you and me."],
+        hungry: ["i'll make my name on you, {name}.", "everyone knows {name}. soon they'll know the one who beat them.", "your legend's about to get a new ending, {name}.", "time someone took {name} down a peg.", "beat {name} and i'm somebody.", "i want what {name} has. i'll take it.", "{name}'s the ladder. i'm climbing.", "the fastest way up is through {name}.", "i'll be the one who beat {name}.", "they'll say my name after {name}'s.", "i've dreamed about beating {name}.", "{name} is the door. i'm knocking.", "one fight with {name} and i'm made.", "they know {name}. they'll know me after this.", "i need {name}'s name. i'll earn it.", "{name} is my ticket.", "step aside, {name}. it's my turn.", "i hunger for it, {name}. your fame."],
+        cold: ["a big name makes a big target, {name}.", "fame won't save you from me, {name}.", "you've had your day, {name}.", "legends fall, {name}. all of them.", "i've studied you, {name}. i'm ready.", "you're just a name, {name}. names die.", "no hard feelings, {name}. just business.", "nothing personal, {name}. mostly.", "{name}. you're a step, nothing more.", "i don't fear names, {name}.", "{name}, your time's up.", "reputation won't block a scimmy, {name}.", "the bigger they are, {name}.", "you'll fall like the rest, {name}.", "i've beaten better than you, {name}.", "{name}. it ends here, quietly.", "fame's thin armour, {name}.", "cold day for you, {name}."]
     },
     // felling a greater name than your own, the deed that makes a legend (spreads as news)
     felledName: {
-        cocky: ["i just felled {name}! remember who did it!", "the mighty {name} - beaten by ME.", "they'll tell this one for years: i took down {name}!", "{name}'s legend ends here. mine begins."],
-        proud: ["i bested {name}. i can scarcely believe it.", "{name} was the greater name. not any more.", "the day i felled {name} - i'll never forget it.", "a giant falls. i felled {name}."],
-        wry: ["turns out {name} bleeds like the rest of us.", "so much for the great {name}.", "one less legend to worry about - {name}'s done."]
+        cocky: ["i just felled {name}! remember who did it!", "the mighty {name} - beaten by ME.", "they'll tell this one for years: i took down {name}!", "{name}'s legend ends here. mine begins.", "{name} is down! bow to the new name!", "beat {name}. yes, THAT {name}.", "ha! {name}! me! done!", "remember this: i felled {name}.", "{name}'s fame? mine now.", "who's the legend now, {name}?", "i just made a legend. by ending {name}'s.", "{name} down. told you i was good.", "and that's {name} beaten. next!", "so much for {name}. next legend, please.", "tell everyone: {name} lost to me.", "{name}? beaten. by me. shout it.", "put my name above {name}'s now.", "i did what nobody could: {name}, felled."],
+        proud: ["i bested {name}. i can scarcely believe it.", "{name} was the greater name. not any more.", "the day i felled {name} - i'll never forget it.", "a giant falls. i felled {name}.", "i beat {name}. i actually beat {name}.", "{name} fell to me. i'm still shaking.", "the day i bested {name}. today.", "never thought i'd stand over {name}.", "i've done it. {name}. done.", "{name}, the great {name}, beaten. by me.", "i won't forget this. {name} beaten.", "my hands are shaking. {name} is down.", "i took on {name} and i'm still standing.", "{name}. felled. i can't believe it.", "years of work. {name} beaten.", "i did it. {name}.", "proudest day. {name} down.", "i stood against {name} and won."],
+        wry: ["turns out {name} bleeds like the rest of us.", "so much for the great {name}.", "one less legend to worry about - {name}'s done.", "{name}'s a bit less legendary now.", "well, {name} was overrated.", "the legend {name}. bit fragile, it turns out.", "{name} bleeds like the rest. who knew.", "sorry, {name}. bad luck.", "{name}? beaten. cup of tea now.", "{name} went down easier than the stories said.", "so that's what beating {name} feels like. nice.", "another legend for the bones pile. {name}.", "{name} down. the tales lied a bit.", "one less name to worry about. {name}.", "{name}. felled. moving on.", "turns out {name} was mortal after all.", "fame didn't help {name} much.", "{name} down. anyone else famous about?"]
     },
     // an individual's low point: hard times, a run of bad luck
     despair: {
-        grim: ["everything's falling apart lately.", "can't catch a break, me. not lately.", "i don't know how much more of this i can take.", "nothing's gone right in a long while.", "rock bottom, this. proper rock bottom.", "what's the point.", "nothing goes right.", "i should just go home."],
-        weary: ["so tired of losing. so tired.", "starting to wonder why i bother.", "some days it's hard to keep going out here.", "feels like the whole world's against me.", "i'm so tired of this.", "can't catch a break.", "every day the same."],
-        neutral: ["rough patch, this. a real rough patch.", "hard times. they come to us all, i suppose.", "not my finest hour, i'll admit.", "bad day.", "not going well.", "sigh."]
+        grim: ["everything's falling apart lately.", "can't catch a break, me. not lately.", "i don't know how much more of this i can take.", "nothing's gone right in a long while.", "rock bottom, this. proper rock bottom.", "what's the point.", "nothing goes right.", "i should just go home.", "i lost the rune. i lost it all.", "why do i even bother.", "every fight goes wrong lately.", "nothing works. nothing.", "the world's got it in for me.", "i can't win a thing.", "even the goblins are beating me.", "lost my gear. lost my will.", "i'm done. maybe. i don't know.", "there's no coming back from this.", "dark days, these.", "no gold, no gear, no luck.", "what's left to lose. nothing.", "i'm in a hole and still digging."],
+        weary: ["so tired of losing. so tired.", "starting to wonder why i bother.", "some days it's hard to keep going out here.", "feels like the whole world's against me.", "i'm so tired of this.", "can't catch a break.", "every day the same.", "another loss. of course.", "i've no fight left.", "bad luck follows me about.", "i just want one good day.", "too tired to even be angry.", "sick of losing.", "everything's uphill lately.", "i could cry, if i had the energy.", "why does it always go wrong.", "so tired. so, so tired.", "another day of this. brilliant.", "even sleep doesn't help.", "nothing left in the tank.", "i've had enough, honestly.", "i'm not coping, really."],
+        neutral: ["rough patch, this. a real rough patch.", "hard times. they come to us all, i suppose.", "not my finest hour, i'll admit.", "bad day.", "not going well.", "sigh.", "not a good time, this.", "things are bad.", "a run of bad luck.", "it's been a rough week.", "nothing's going right.", "bad patch.", "not going great, no.", "could be better. much.", "it's been hard lately.", "tough times.", "not my week.", "down on my luck.", "rough, all of it.", "hard going lately."]
     },
     // the turnaround out of it: a comeback, back on their feet
     comeback: {
-        up: ["i'm back on my feet! thought i was finished.", "down but never out, me. watch this.", "the worst is behind me now. onwards!", "picked myself up. that's what you do.", "you can't keep a good one down for long.", "right, i'm back! who missed me?", "down but never out.", "that's better. let's go again."],
-        cocky: ["ha! back from the dead. told you i'd bounce.", "counted me out? big mistake.", "i've clawed my way back, and i'm hungrier than ever.", "did you think that would stop me?", "you can't keep me down.", "back and better."],
-        warm: ["good days again, at last. felt like forever.", "the sun's out again, and so am i.", "back to my old self. it's a relief, honestly.", "thanks for waiting, {name}. i'm alright now.", "feeling myself again."]
+        up: ["i'm back on my feet! thought i was finished.", "down but never out, me. watch this.", "the worst is behind me now. onwards!", "picked myself up. that's what you do.", "you can't keep a good one down for long.", "right, i'm back! who missed me?", "down but never out.", "that's better. let's go again.", "the bad times are done. onward!", "i'm back, and i've got food this time.", "took a knock, got back up. as you do.", "feels good to be winning again.", "new day, new me, same scimmy.", "watch me now.", "back in the game, and how.", "i'm alright again. more than alright.", "look who's back on form.", "did anyone miss me? doesn't matter, i'm here.", "picked up, dusted off, ready.", "bad luck ran out. good luck's in.", "back with a bang.", "the comeback's on."],
+        cocky: ["ha! back from the dead. told you i'd bounce.", "counted me out? big mistake.", "i've clawed my way back, and i'm hungrier than ever.", "did you think that would stop me?", "you can't keep me down.", "back and better.", "you didn't think that was the end, did you?", "back. obviously.", "takes more than that to stop me.", "lost a battle, not the war. and now, the war.", "i don't stay down. it's a rule.", "rumours of my downfall, etc.", "and i'm back. try to keep up.", "did you enjoy my absence? too bad.", "the fall was temporary. i'm not.", "you can knock me down. i get up better.", "nothing keeps me down. nothing.", "miss me? i'd miss me.", "returned, and worse for you.", "even at my lowest, i'm above most."],
+        warm: ["good days again, at last. felt like forever.", "the sun's out again, and so am i.", "back to my old self. it's a relief, honestly.", "thanks for waiting, {name}. i'm alright now.", "feeling myself again.", "i'm alright again. thanks for asking, {name}.", "better days are here. finally.", "back to my old self, {name}.", "i've got my smile back.", "thanks for putting up with me, {name}.", "it got better. it does, you know.", "i'm okay now. really.", "back on my feet, and grateful.", "the fog's lifted, {name}.", "good to feel like me again.", "i made it through. with help.", "you helped more than you know, {name}.", "sun's back out. so am i.", "back in the world, and glad of it.", "i've come through it, {name}."]
     },
     // a taunt throwing a remembered wrong back in a rival's face ({topic} = the grievance)
     tauntGrudge: {
-        menacing: ["you {topic}, {name}. i haven't forgotten.", "remember when you {topic}, {name}? i do.", "you {topic}, {name}. today you pay for it.", "i owe you for the time you {topic}, {name}."],
-        bitter: ["you {topic}, {name}. that's not something i let go.", "i still remember you {topic}, {name}.", "you {topic} once, {name}. i've waited a long time for this."],
-        cocky: ["you {topic}, {name}? big mistake. let me remind you.", "last time you {topic}, {name}. won't happen twice."]
+        menacing: ["you {topic}, {name}. i haven't forgotten.", "remember when you {topic}, {name}? i do.", "you {topic}, {name}. today you pay for it.", "i owe you for the time you {topic}, {name}.", "you {topic}. i've not forgotten, {name}.", "when you {topic}, {name}, you made an enemy.", "think i forgot you {topic}, {name}? think again.", "you {topic}. now it's my turn, {name}.", "you {topic}, {name}. that's why i'm here.", "{name}. you {topic}. we settle it now.", "every night i remember you {topic}, {name}.", "you {topic}. the bill's due, {name}.", "you {topic}, {name}. i've come to collect.", "i've waited since you {topic}, {name}.", "you {topic} and thought that was it, {name}?", "for the day you {topic}, {name}, this.", "you {topic}, {name}. look where it got you.", "{name}. you {topic}. i don't forget."],
+        bitter: ["you {topic}, {name}. that's not something i let go.", "i still remember you {topic}, {name}.", "you {topic} once, {name}. i've waited a long time for this.", "you {topic}, {name}. i still feel it.", "you {topic}. that's who you are, {name}.", "i trusted you, and you {topic}, {name}.", "you {topic}, {name}. it never left me.", "some nights i still see you {topic}, {name}.", "you {topic}. that's all i think of, {name}.", "you {topic} and walked off, {name}.", "you {topic}, {name}. some things don't heal.", "you {topic}. and you call me the bitter one, {name}.", "remember you {topic}, {name}? i remember every second.", "when you {topic}, {name}, that was the end of us.", "you {topic}, {name}. i'll never let it go.", "you {topic}. i've carried that, {name}.", "you {topic}, {name}. that's why we're here.", "you {topic}. i tried to forget, {name}."],
+        cocky: ["you {topic}, {name}? big mistake. let me remind you.", "last time you {topic}, {name}. won't happen twice.", "you {topic}, {name}? adorable. watch this.", "still proud you {topic}, {name}? enjoy it while you can.", "you {topic}, {name}. i'm here to fix that.", "oh, you {topic}? cute. my turn, {name}.", "you {topic} once, {name}. i've been practising.", "you {topic}. shame you didn't finish the job, {name}.", "you {topic}, {name}. i've come to return the favour.", "did you think i'd forget you {topic}, {name}? i don't lose.", "you {topic}, {name}, and i got better. you didn't.", "the time you {topic}? that was your best day, {name}.", "you {topic}, {name}. i'll make it look easy.", "you {topic}. and yet here i am, {name}, unbothered.", "you {topic}, {name}. big mistake, small player.", "you {topic}. that's all you've got, {name}?", "you {topic} once, {name}. brag about it while you can.", "you {topic}, {name}. let's see you do it again."]
     }
 };
 
@@ -18922,12 +18996,12 @@ function summary(bot) {
 module.exports = { describe, summary, nearestFacility, nearestSite };
 
 },{"../../skills/magic":716,"./boats":68,"./regions":142,"./sites":150,"./travel":159}],83:[function(require,module,exports){
-// a sociable bot starts a chat with someone nearby: small talk, a question, an opinion, or a story from its history
-// the other bot hears it and replies via hearing.js; loners never start, heavily rate-limited
+// a sociable bot opens a chat with someone nearby: an opener from its state (a recent episode, the
+// partner's skill, the town, a remembered spot), stock small talk as fallback; loners never start
 
 const npcs = require('@2003scape/rsc-data/config/npcs');
 
-let personality, mood, chatgen, social, reputation, dreams;
+let personality, mood, chatgen, social, reputation, dreams, episodes, goals, context, memory, regions, voice;
 function deps() {
     if (personality) return;
     personality = require('./personality');
@@ -18936,6 +19010,12 @@ function deps() {
     social = require('./social-emergent');
     reputation = require('./reputation');
     dreams = require('./dreams');
+    try { episodes = require('./episodes'); } catch (e) { episodes = null; }
+    try { goals = require('./goals'); } catch (e) { goals = null; }
+    try { context = require('./context'); } catch (e) { context = null; }
+    try { memory = require('./memory'); } catch (e) { memory = null; }
+    try { regions = require('./regions'); } catch (e) { regions = null; }
+    try { voice = require('./voice'); } catch (e) { voice = null; }
 }
 
 function one(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -18946,9 +19026,20 @@ function say(bot, situation, ctx) {
     deps();
     let line;
     try { line = chatgen.generate(situation, ctx || {}, bot); } catch (e) { line = null; }
-    if (!line) return;
+    if (!line) return false;
     bot._lastSaid = line;
     try { bot.broadcastChat(line); } catch (e) {}
+    return true;
+}
+// a composed line in the bot's voice
+function sayText(bot, text) {
+    deps();
+    if (!text) return false;
+    let out = text;
+    try { if (voice) out = voice.apply(bot, text); } catch (e) { out = text; }
+    bot._lastSaid = out;
+    try { bot.broadcastChat(out); } catch (e) {}
+    return true;
 }
 
 // the foe that has hurt this bot most, as a name
@@ -18983,12 +19074,12 @@ function storyTopic(bot) {
         if (dl) topics.push('what I\'m working toward - ' + dl);
     } catch (e) {}
     // real memories first: fights, finds and quests that happened
-    try { const real = require('./episodes').storyTopic(bot); if (real) { topics.push(real, real); } } catch (e) {}
+    try { const real = episodes && episodes.storyTopic(bot); if (real) { topics.push(real, real); } } catch (e) {}
     topics.push('a close call I once had round here', 'the old days when I was just starting out', 'a rare find I stumbled on once');
     return one(topics);
 }
 
-// choose a conversation type by personality + mood
+// choose a stock conversation type by personality + mood
 function pickType(bot) {
     const p = personality.of(bot);
     const m = mood.of(bot);
@@ -19006,6 +19097,114 @@ function pickType(bot) {
     return 'smallTalk';
 }
 
+// the persisted per-partner record (cache.bot.social.people[username])
+function recFor(bot, username, create) {
+    try {
+        const cb = bot.cache && bot.cache.bot;
+        if (!cb) return null;
+        const s = cb.social || (create ? (cb.social = {}) : null);
+        if (!s) return null;
+        const people = s.people || (create ? (s.people = {}) : null);
+        if (!people) return null;
+        if (!people[username] && create) people[username] = { met: 0, lastSeen: 0, lastLevel: 0, topics: [] };
+        const rec = people[username] || null;
+        if (rec && !rec.topics) rec.topics = [];
+        return rec;
+    } catch (e) { return null; }
+}
+
+// partner score: relationship + familiarity, minus the last partner and anyone mid-greeting, plus noise
+function pickTarget(bot) {
+    let best = null, bestS = -1e9;
+    const now = bot.world ? bot.world.ticks | 0 : 0;
+    let list;
+    try { list = bot.getNearbyEntities('players', 5); } catch (e) { return null; }
+    for (const o of list) {
+        if (!o || o === bot || o.username === bot.username || o.opponent || !o.username) continue;
+        let s = 1 + Math.random() * 0.5;
+        try { s += Math.max(-2, Math.min(4, social.sentiment(bot, o.username))) * 0.3; } catch (e) {}
+        const rec = recFor(bot, o.username, false);
+        if (rec) s += Math.min(rec.met || 0, 5) * 0.12;
+        if (bot._lastPartner === o.username) s -= 0.8;
+        if (now - (o._greetedAt || 0) < 40) s -= 0.5;
+        if (s > bestS) { bestS = s; best = o; }
+    }
+    return best;
+}
+
+// the partner's current skill from its goal, or null
+function partnerSkill(target) {
+    try {
+        const g = goals && goals.current(target);
+        const s = g && g.skill;
+        return s ? String(s) : null;
+    } catch (e) { return null; }
+}
+
+// the opener: weighted pick between state openers and stock small talk
+function open(bot, target, rec) {
+    const name = nameOf(target);
+    const c = [];
+
+    // 1. a recent episode, then the ball back
+    let news = null;
+    try {
+        const eps = episodes ? episodes.recent(bot, 3, 4000) : [];
+        if (eps.length) news = episodes.describe(bot, eps[0]);
+    } catch (e) { news = null; }
+    if (news && rec.lastNews !== news) {
+        c.push({ w: 0.35, run() { rec.lastNews = news; return sayText(bot, news + ' ' + one(['you?', 'what about you?', 'anything on your end?', 'how about you, ' + name + '?'])); } });
+    }
+
+    // 2. the partner's skill, fresh or recalled
+    const skill = partnerSkill(target);
+    if (skill) {
+        const recalled = rec.topics.indexOf(skill) !== -1 && (bot.world ? bot.world.ticks | 0 : 0) - (rec.lastSeen || 0) > 300;
+        c.push({ w: 0.3, run() {
+            rec.topics.push(skill); if (rec.topics.length > 6) rec.topics.shift();
+            return say(bot, recalled ? 'recallSubject' : 'askSubject', { name, topic: skill });
+        } });
+    }
+
+    // 3. the place we're standing in
+    let region = null;
+    try { region = context ? context.describe(bot).region : null; } catch (e) { region = null; }
+    if (region && region.name && rec.lastPlace !== region.name) {
+        c.push({ w: 0.15, run() { rec.lastPlace = region.name; return say(bot, 'commentPlace', { name, place: region.name }); } });
+    }
+
+    // 4. a spot the bot remembers as dangerous or rich
+    let areas = [];
+    try { areas = memory ? memory.topAreas(bot) : []; } catch (e) { areas = []; }
+    for (const a of areas.slice(0, 2)) {
+        let r = null;
+        try { r = regions ? regions.regionAt(a.x, a.y) : null; } catch (e) { r = null; }
+        if (!r || !r.name || rec.lastArea === r.name) continue;
+        c.push({ w: 0.12, run() { rec.lastArea = r.name; return say(bot, a.kind === 'danger' ? 'warnPlace' : 'tipPlace', { name, place: r.name }); } });
+    }
+
+    // 5. stock openers, type rotated per partner
+    let type = pickType(bot);
+    const usedTypes = rec.openers || [];
+    for (let i = 0; i < 4 && usedTypes.indexOf(type) !== -1; i++) type = pickType(bot);
+    c.push({ w: c.length ? 0.3 : 1, run() {
+        const ctx = { name };
+        if (type === 'tellStory') {
+            let topic = storyTopic(bot);
+            for (let i = 0; i < 4 && rec.lastStory === topic; i++) topic = storyTopic(bot);
+            ctx.topic = topic;
+            rec.lastStory = topic;
+        }
+        rec.openers = (rec.openers || []).concat(type).slice(-3);
+        return say(bot, type, ctx);
+    } });
+
+    let total = 0; for (const x of c) total += x.w;
+    let r = Math.random() * total;
+    for (const x of c) { r -= x.w; if (r <= 0) return x.run(); }
+    return c[c.length - 1].run();
+}
+
 // per-tick: a sociable bot occasionally opens a conversation with someone nearby
 function onTick(bot) {
     deps();
@@ -19015,12 +19214,7 @@ function onTick(bot) {
     const p = personality.of(bot);
     if (p.sociability < 0.3) { bot._convoStartCd = rand(400, 800); return; } // loners keep to themselves
 
-    let target = null;
-    try {
-        for (const o of bot.getNearbyEntities('players', 5)) {
-            if (o && o !== bot && o.username !== bot.username && !o.opponent) { target = o; break; }
-        }
-    } catch (e) {}
+    const target = pickTarget(bot);
     if (!target) { bot._convoStartCd = rand(60, 140); return; }
 
     // extroverts open up more; a good mood helps.
@@ -19030,26 +19224,9 @@ function onTick(bot) {
         return;
     }
 
-    // rotate openers: not the same opener or story twice in a row with the same person
-    let type = pickType(bot);
-    let rec = null;
-    try {
-        const cb = bot.cache && bot.cache.bot;
-        const s = cb && (cb.social || (cb.social = {}));
-        const people = s && (s.people || (s.people = {}));
-        rec = people && (people[target.username] || (people[target.username] = { met: 0, lastSeen: 0, lastLevel: 0, topics: [] }));
-    } catch (e) { rec = null; }
-    const usedTypes = rec && rec.openers ? rec.openers : [];
-    for (let i = 0; i < 4 && usedTypes.indexOf(type) !== -1; i++) type = pickType(bot);
-    const ctx = { name: nameOf(target) };
-    if (type === 'tellStory') {
-        let topic = storyTopic(bot);
-        for (let i = 0; i < 4 && rec && rec.lastStory === topic; i++) topic = storyTopic(bot);
-        ctx.topic = topic;
-        if (rec) rec.lastStory = topic;
-    }
-    if (rec) { rec.openers = (rec.openers || []).concat(type).slice(-3); }
-    say(bot, type, ctx);
+    const rec = recFor(bot, target.username, true) || { met: 0, lastSeen: 0, lastLevel: 0, topics: [] };
+    open(bot, target, rec);
+    bot._lastPartner = target.username;
     try { social.noteInteraction(bot, target.username, 0.3); } catch (e) {}
 
     // a proper breather after starting one, so bots don't natter non-stop.
@@ -19058,7 +19235,7 @@ function onTick(bot) {
 
 module.exports = { onTick, storyTopic, pickType };
 
-},{"./chatgen":76,"./dreams":88,"./episodes":90,"./mood":119,"./personality":128,"./reputation":143,"./social-emergent":151,"@2003scape/rsc-data/config/npcs":757}],84:[function(require,module,exports){
+},{"./chatgen":76,"./context":82,"./dreams":88,"./episodes":90,"./goals":98,"./memory":116,"./mood":119,"./personality":128,"./regions":142,"./reputation":143,"./social-emergent":151,"./voice":160,"@2003scape/rsc-data/config/npcs":757}],84:[function(require,module,exports){
 // co-op: a helpful bot pitches in when it sees any nearby player (human or bot)
 // fighting a monster, by attacking a free monster near that scrap. rsc is
 // single-combat, so "helping" means taking the adds around a player. keys on
@@ -19512,7 +19689,7 @@ function newThread(bot, partner) {
     const now = nowTick(bot);
     return (threads(bot)[partner] = {
         partner, turns: 0, lastTick: now, opened: now, topic: null, expecting: null,
-        history: [], budget: 3 + rnd(4), asked: {}
+        history: [], budget: 4 + rnd(5), asked: {}
     });
 }
 function getThread(bot, partner, create) {
@@ -19541,6 +19718,32 @@ function remember(bot, partner, patch) {
     if (patch && patch.told) { const told = rec.told || (rec.told = []); told.push(patch.told); if (told.length > 4) told.shift(); }
     rec.lastSeen = nowTick(bot);
     return rec;
+}
+
+// a place keyword as it is said: towns by name, facilities with "the"
+const TOWNS = new Set(['varrock', 'lumbridge', 'falador', 'draynor', 'draynor village', 'al kharid', 'edgeville', 'barbarian village', 'port sarim', 'rimmington', 'taverley', 'catherby', 'seers village', 'ardougne', 'yanille', 'karamja', 'brimhaven', 'shilo village', 'entrana', 'burthorpe', 'tutorial island', 'gnome stronghold', 'tree gnome village', 'hemenster', 'mcgrubor', 'port khazard', 'crandor', 'baxtorian falls', 'digsite', 'goblin village']);
+function placeName(kw) {
+    const k = String(kw || '').toLowerCase().trim();
+    if (!k) return 'there';
+    if (TOWNS.has(k)) return k.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    return 'the ' + k;
+}
+// npc names that are plain words for people, never a subject
+const NOT_A_SUBJECT = new Set(['adventurer', 'man', 'woman', 'boy', 'girl', 'child', 'person', 'friend', 'stranger', 'player']);
+
+// the subject a line names
+function topicOf(u) {
+    if (!u || !u.entities) return null;
+    const e = u.entities;
+    if (e.skills.length) { const s = e.skills[0]; return { kind: 'skill', name: String(s.name || s), turns: 0 }; }
+    if (u.boss) return { kind: 'npc', name: String(u.boss.name || u.boss.kw), id: u.boss.id, turns: 0 };
+    if (e.npcs.length) { const n = e.npcs[0]; const nn = String(n.name || n); if (!NOT_A_SUBJECT.has(nn.toLowerCase())) return { kind: 'npc', name: nn, id: n.id, turns: 0 }; }
+    if (e.items.length) { const i = e.items[0]; const iname = String(i.name || i); if (!/^(coins?|pot|bucket|jug)$/i.test(iname)) return { kind: 'item', name: iname, id: i.id, turns: 0 }; }
+    if (u.quest) return { kind: 'quest', name: String(u.quest.name || u.quest.kw), turns: 0 };
+    // only a town counts as a place subject
+    if (u.placeHit && TOWNS.has(String(u.placeHit.kw).toLowerCase())) return { kind: 'place', name: placeName(u.placeHit.kw), turns: 0 };
+    if (u.primary && (u.primary.type === 'whatDoing' || u.primary.type === 'whatsNew')) return { kind: 'activity', name: 'that', turns: 0 };
+    return null;
 }
 
 // a skill/quest/boss/place a person says in the first person is kept on their record,
@@ -19579,10 +19782,33 @@ function recallTold(bot, username, within) {
 function toldQuestion(bot, told, name, withName) {
     let line = null;
     switch (told.kind) {
-        case 'skill': line = one(["how's the {x} going, {n}?", "still on the {x}, {n}?", "getting anywhere with the {x}?"]); break;
-        case 'quest': line = one(["did you finish {x}, {n}?", "how's {x} going?", "still stuck on {x}, {n}?"]); break;
-        case 'boss': line = one(["had another go at {x}, {n}?", "beaten {x} yet, {n}?"]); break;
-        case 'place': line = one(["how was {x}, {n}?", "back from {x} already, {n}?", "still around {x}?"]); break;
+        case 'skill': line = one([
+            "how's the {x} going, {n}?", "still on the {x}, {n}?", "getting anywhere with the {x}?",
+            "any levels in {x} since, {n}?", "did the {x} pay off, {n}?", "you still grinding {x}, {n}?",
+            "how's {x} treating you, {n}?", "made a dent in {x} yet?", "gone up in {x} at all, {n}?",
+            "sick of {x} yet, {n}?", "still at the {x} then?", "how far did you get with {x}, {n}?",
+            "given up on {x} or still at it?", "was the {x} worth the bother, {n}?"
+        ]); break;
+        case 'quest': line = one([
+            "did you finish {x}, {n}?", "how's {x} going?", "still stuck on {x}, {n}?",
+            "get anywhere with {x}, {n}?", "{x} done yet, {n}?", "did {x} get any easier?",
+            "how far into {x} are you now, {n}?", "wrapped up {x} yet?", "still chipping away at {x}, {n}?",
+            "did you crack {x} in the end, {n}?", "{x} still giving you grief?", "any luck with {x}, {n}?",
+            "was {x} as bad as they say, {n}?"
+        ]); break;
+        case 'boss': line = one([
+            "had another go at {x}, {n}?", "beaten {x} yet, {n}?", "did {x} go down in the end?",
+            "still hunting {x}, {n}?", "any luck with {x}, {n}?", "how'd it go with {x}?",
+            "{x} still standing, {n}?", "you get your revenge on {x}, {n}?", "did {x} give you a kicking again?",
+            "back for round two with {x}, {n}?", "sorted {x} out yet, {n}?", "is {x} still on your list, {n}?"
+        ]); break;
+        case 'place': line = one([
+            "how was {x}, {n}?", "back from {x} already, {n}?", "still around {x}?",
+            "did you find what you wanted at {x}, {n}?", "anything good at {x}, {n}?", "how'd {x} treat you?",
+            "was {x} worth the walk, {n}?", "you still knocking about {x}?", "get anything done at {x}, {n}?",
+            "{x} still in one piece, {n}?", "any trouble out at {x}?", "been back to {x} since, {n}?",
+            "what was {x} like, {n}?"
+        ]); break;
         default: return null;
     }
     told.asked = nowTick(bot);
@@ -19670,11 +19896,30 @@ function findPlayer(bot, username) {
     } catch (e) {  }
     return null;
 }
+// the bot whose name appears as a whole word in the line
+function namedBot(text, bots) {
+    const low = String(text || '').toLowerCase();
+    if (!low) return null;
+    for (const b of bots) {
+        const n = b && b.username ? b.username.toLowerCase() : '';
+        if (!n) continue;
+        const at = low.indexOf(n);
+        if (at === -1) continue;
+        const before = at === 0 ? ' ' : low[at - 1];
+        const after = at + n.length >= low.length ? ' ' : low[at + n.length];
+        if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) continue;
+        return b;
+    }
+    return null;
+}
 // called every tick for every bot (bots/index.js runBotBrain; once per tick)
 function flush(bot) {
+    // floor check once per tick, queue or not
+    const tickNow = nowTick(bot);
+    if (bot._floorTick !== tickNow) { bot._floorTick = tickNow; try { maybeJoinFloor(bot); } catch (e) {  } }
     const q = bot._sayQueue;
     if (!q || !q.length) return;
-    const now = nowTick(bot);
+    const now = tickNow;
     if (bot._sayFlushTick === now) return;
     bot._sayFlushTick = now;
     // a due human line goes before any banter; stale banter is dropped.
@@ -19725,8 +19970,79 @@ function flush(bot) {
     noteSpoken(bot);
     if (e.partner) {
         const partner = findPlayer(bot, e.partner);
-        if (partner && partner.isBot) onReplyDelivered(partner, bot, e.text);
+        if (partner && partner.isBot) {
+            touchFloor(bot);
+            onReplyDelivered(partner, bot, e.text);
+            maybeThirdVoice(bot, partner, e.text);
+        }
     }
+}
+
+// the crowd's floor: a subject put to a group, one per 24-tile cell, joined turn by turn
+// bounded by heads and turns, closes after FLOOR_TTL ticks of silence
+const FLOOR_CELL = 24;
+const FLOOR_TTL = 40;       // ticks of silence before a floor closes
+const FLOOR_MAX_HEADS = 4;  // speakers in one floor
+function floorKey(c) { return Math.floor(c.x / FLOOR_CELL) + ',' + Math.floor(c.y / FLOOR_CELL); }
+function floors(world) { return world._botFloors || (world._botFloors = {}); }
+function openFloor(speaker, target, topic) {
+    if (!speaker || !speaker.world || !topic) return;
+    const all = floors(speaker.world);
+    const key = floorKey(speaker);
+    const now = speaker.world.ticks | 0;
+    const f = all[key];
+    // a live floor keeps its subject; a stale one is replaced
+    if (f && now - f.lastTick <= FLOOR_TTL && f.turns < f.budget) return;
+    all[key] = { topic, x: speaker.x, y: speaker.y, opened: now, lastTick: now, turns: 1, budget: 6 + rnd(5), heads: [speaker.username, target ? target.username : null].filter(Boolean), last: speaker.username };
+}
+function touchFloor(bot) {
+    if (!bot || !bot.world) return;
+    const f = floors(bot.world)[floorKey(bot)];
+    if (!f) return;
+    const now = bot.world.ticks | 0;
+    if (now - f.lastTick > FLOOR_TTL) return;
+    f.lastTick = now; f.turns += 1; f.last = bot.username;
+    if (f.heads.indexOf(bot.username) === -1 && f.heads.length < FLOOR_MAX_HEADS) f.heads.push(bot.username);
+}
+// per bot per tick: join the local floor with a word on its subject
+function maybeJoinFloor(bot) {
+    const w = bot.world;
+    if (!w || !w._botFloors) return;
+    const f = w._botFloors[floorKey(bot)];
+    if (!f) return;
+    const now = w.ticks | 0;
+    if (now - f.lastTick > FLOOR_TTL || f.turns >= f.budget || f.heads.length >= FLOOR_MAX_HEADS) { if (now - f.lastTick > FLOOR_TTL || f.turns >= f.budget) delete w._botFloors[floorKey(bot)]; return; }
+    if (f.heads.indexOf(bot.username) !== -1 || bot.opponent || bot._floorCd > 0) { if (bot._floorCd > 0) bot._floorCd -= 1; return; }
+    if (Math.abs(bot.x - f.x) > HEAR_RANGE / 2 || Math.abs(bot.y - f.y) > HEAR_RANGE / 2) return;
+    // a beat after the last line, then a roll sized by sociability
+    if (now - f.lastTick < 3) return;
+    const p = personality.of(bot);
+    if (Math.random() > 0.05 + p.sociability * 0.08) return;
+    bot._floorCd = 60 + rnd(60);
+    const last = findPlayer(bot, f.last);
+    if (!last) return;
+    const said = Math.random() < 0.5 ? topicRemark(bot, f.topic) : topicFollowUp(bot, f.topic);
+    if (!said) return;
+    const t = getThread(bot, last.username, true);
+    t.topic = Object.assign({}, f.topic, { turns: 0 });
+    if (/\?$/.test(said)) t.expecting = { kind: 'free', about: 'topic' };
+    f.heads.push(bot.username); f.turns += 1; f.lastTick = now; f.last = bot.username;
+    queueSay(bot, voiced(bot, said), 1 + rnd(2), last);
+}
+
+// a bystander may chime in on a bot-to-bot exchange: one bot, low odds, long rest after
+function maybeThirdVoice(bot, partner, text) {
+    if (Math.random() > 0.35) return;
+    let others;
+    try { others = nearbyBots(bot, HEAR_RANGE).filter((b) => b && b !== partner && b.username !== partner.username && !b._sayDelivering); } catch (e) { return; }
+    if (!others.length) return;
+    const third = others[rnd(others.length)];
+    if (third._thirdCd > 0) { third._thirdCd -= 1; return; }
+    if (getThread(third, bot.username, false) || getThread(third, partner.username, false)) return;
+    const p = personality.of(third);
+    if (Math.random() > 0.15 + p.sociability * 0.25) { third._thirdCd = 20 + rnd(30); return; }
+    third._thirdCd = 120 + rnd(120);
+    respond(third, bot, reading(String(text), bot, [third]), { delay: 3 + rnd(4), opener: true });
 }
 
 // every bot line leaves through pacedChat (broadcastChat is swapped for it at first brain pass),
@@ -19749,7 +20065,9 @@ function normLine(text) {
         .replace(/@[a-z0-9]{2,3}@/gi, '')
         .replace(/[^a-z0-9 ]/gi, '')
         .trim()
-        .toLowerCase();
+        .toLowerCase()
+        // fold voice abbreviations: u = you, ur = your, r = are
+        .replace(/\bu\b/g, 'you').replace(/\bur\b/g, 'your').replace(/\br\b/g, 'are').replace(/\bya\b/g, 'you');
 }
 
 // did a different nearby bot just say the same line?
@@ -19835,13 +20153,16 @@ function onSpeech(speaker, text) {
 
     // a bot's ambient mutter is read only if someone will answer it (the responder roll runs first).
     if (!isHuman(speaker) && !/\?|\b(hi|hello|hey|yo|how|what|where|who|why|when|anyone|any1|do you|are you|want|fancy|let's|lets|wanna|shall|help|follow|come|wait)\b/i.test(text)) {
-        const sorted = bots.slice().sort((a, b) => dist(a, speaker) - dist(b, speaker));
-        let target = null;
-        for (const cand of sorted) {
-            if (cand._heardCd > 0) { cand._heardCd -= 1; continue; }
-            const p = personality.of(cand);
-            if (Math.random() < 0.3 + p.sociability * 0.5) { target = cand; break; }
-            cand._heardCd = 10 + rnd(20);
+        // a named bot in earshot answers, else the nearest willing one
+        let target = namedBot(String(text), bots);
+        if (!target) {
+            const sorted = bots.slice().sort((a, b) => dist(a, speaker) - dist(b, speaker));
+            for (const cand of sorted) {
+                if (cand._heardCd > 0) { cand._heardCd -= 1; continue; }
+                const p = personality.of(cand);
+                if (Math.random() < 0.3 + p.sociability * 0.5) { target = cand; break; }
+                cand._heardCd = 10 + rnd(20);
+            }
         }
         if (!target) return;
         respond(target, speaker, reading(String(text), speaker, bots), { delay: 2 + rnd(3), opener: true });
@@ -19876,7 +20197,19 @@ function onSpeech(speaker, text) {
             cand._heardCd = 10 + rnd(20);
         }
     }
-    if (target) respond(target, speaker, u, { delay: 2 + rnd(3), opener: true });
+    if (!target) return;
+    respond(target, speaker, u, { delay: 2 + rnd(3), opener: true });
+    // a subject opens the crowd's floor and may draw a second voice a little later
+    const subject = topicOf(u);
+    if (subject && subject.kind !== 'activity') openFloor(speaker, target, subject);
+    if (bots.length > 1 && subject && Math.random() < 0.25) {
+        const others = bots.filter((b) => b && b !== target && (b._thirdCd | 0) <= 0);
+        if (others.length) {
+            const second = others[rnd(others.length)];
+            second._thirdCd = 120 + rnd(120);
+            respond(second, speaker, u, { delay: 6 + rnd(5), opener: true });
+        }
+    }
 }
 
 // a queued reply landed on a bot partner: it may carry the thread on (budgeted).
@@ -19886,16 +20219,17 @@ function onReplyDelivered(partner, bot, text) {
     const u = reading(String(text), bot, [partner]);
     if (u.primary.type === 'farewell') { closeThread(partner, bot.username); return; }
     if (t.turns >= t.budget) { closeThread(partner, bot.username); closeThread(bot, partner.username); return; }
-    // wind the thread down after two rounds of pure pleasantries.
-    if (SMALLTALK_TYPES.has(u.primary.type) && !u.isQuestion) {
+    // two rounds of pure pleasantries close the thread; one that names something or asks back is content
+    const named = !!(u.entities && (u.entities.skills.length || u.entities.npcs.length || u.entities.items.length || u.entities.players.length || u.placeHit || u.quest || u.boss));
+    if (SMALLTALK_TYPES.has(u.primary.type) && !u.isQuestion && !named && !u.secondary) {
         t.smalltalk = (t.smalltalk || 0) + 1;
     } else {
         t.smalltalk = 0;
     }
     if (t.smalltalk >= 2) { closeThread(partner, bot.username); closeThread(bot, partner.username); return; }
-    // continue chance decays with thread length, faster for smalltalk.
+    // continue chance decays with thread length, faster once stale
     let p = 0.85 * (1 - t.turns / (t.budget + 1));
-    if (t.smalltalk >= 1) p *= 0.5;
+    if (t.smalltalk >= 1 && t.turns >= 3) p *= 0.5;
     if (Math.random() < p) respond(partner, bot, u, { delay: 2 + rnd(3), reply: true });
 }
 
@@ -19980,6 +20314,10 @@ function respondInner(bot, speaker, u, opts) {
     t.turns += 1;
     t.history.push({ who: speaker.username, act: u.primary.type, text: u.norm });
     if (t.history.length > 4) t.history.shift();
+    // thread subject: a new one named here wins, else the current one carries up to 3 turns
+    const fresh = topicOf(u);
+    if (fresh) t.topic = fresh;
+    else if (t.topic) { t.topic.turns = (t.topic.turns || 0) + 1; if (t.topic.turns > 3) t.topic = null; }
     const level = speaker.getCombatLevel ? speaker.getCombatLevel() : (speaker.combatLevel || 0);
     const mem = remember(bot, speaker.username, { met: t.turns === 1, level, topic: u.primary.type });
 
@@ -20042,30 +20380,62 @@ function resolveExpectationInner(bot, speaker, u, t, opts) {
             let line = null;
             try {
                 if (ex.action === 'tagalong' || ex.action === 'follow') {
-                    bot._follow = { username: speaker.username, ticks: 300 + rnd(300) };
+                    // a human is followed for a good while; another bot only briefly, and never in a ring
+                    const ring = !!(speaker.isBot && speaker._follow && speaker._follow.username === bot.username);
+                    if (!ring) bot._follow = { username: speaker.username, ticks: speaker.isBot ? 60 + rnd(60) : 300 + rnd(300) };
                     bot._holdTicks = 0;
-                    line = one(["right behind you, {n}.", "lead on then, {n}!", "let's go, {n}."]);
+                    line = one([
+                        "right behind you, {n}.", "lead on then, {n}!", "let's go, {n}.", "after you, {n}.",
+                        "on my way, {n}.", "grand - i'm with you, {n}.", "say no more, {n}.", "right, off we go then, {n}.",
+                        "coming, {n}. don't lose me.", "i'll keep up, {n}.", "good - let's crack on, {n}.", "with you, {n}."
+                    ]);
                 } else if (ex.action === 'party') {
                     party.invite(bot, speaker.username);
-                    line = one(["sent you an invite, {n}.", "invite's on its way, {n}.", "grand - invite sent, {n}."]);
+                    line = one([
+                        "sent you an invite, {n}.", "invite's on its way, {n}.", "grand - invite sent, {n}.",
+                        "done - check your invites, {n}.", "invite sent. welcome aboard, {n}.", "there's an invite for you, {n}.",
+                        "sent, {n}. accept when you're ready.", "invite's gone out, {n}.", "you should have an invite now, {n}.",
+                        "in you come, {n} - invite sent.", "sorted, {n}. invite's with you."
+                    ]);
                 } else if (ex.action === 'trade') {
                     if (bot.trade && typeof bot.trade.request === 'function') bot.trade.request(speaker);
-                    line = one(["opening a trade with you now, {n}.", "here - trade coming up, {n}."]);
+                    line = one([
+                        "opening a trade with you now, {n}.", "here - trade coming up, {n}.", "trade window's on its way, {n}.",
+                        "sending the trade over, {n}.", "trade's coming, {n}.", "one trade, coming up, {n}.",
+                        "here we go then, {n} - trade sent.", "let's see what you've got, {n}.", "trade's open, {n}.",
+                        "sending it now, {n}.", "right you are, {n} - trade incoming."
+                    ]);
                 } else if (ex.action === 'mission' && ex.spec) {
                     hearing.adoptMission(bot, ex.spec);
-                    line = one(["that's settled then, {n}.", "good - let's get to it, {n}."]);
+                    line = one([
+                        "that's settled then, {n}.", "good - let's get to it, {n}.", "deal, {n}.", "right, that's the plan, {n}.",
+                        "grand. we're on, {n}.", "consider it done, {n}.", "sorted - let's crack on, {n}.", "good stuff, {n}. i'm in.",
+                        "that's that, then, {n}.", "say no more, {n}. we're off.", "agreed, {n}. no time like now."
+                    ]);
                 } else if (ex.action === 'gift') {
                     try { require('./mentoring').giveOfferedGift(bot, speaker); } catch (e) {  }
-                    line = one(["all yours, {n}.", "there you go, {n}."]);
+                    line = one([
+                        "all yours, {n}.", "there you go, {n}.", "take it, {n}. no arguments.", "it's yours, {n}. put it to use.",
+                        "here, {n}. don't lose it.", "go on, {n} - have it.", "yours now, {n}. enjoy.", "there - that's yours, {n}.",
+                        "have it, {n}. i've spares.", "it's no use to me, {n}. all yours.", "done, {n}. look after it."
+                    ]);
                 } else {
-                    line = one(["glad to hear it, {n}.", "good stuff.", "that's the spirit."]);
+                    line = one([
+                        "glad to hear it, {n}.", "good stuff.", "that's the spirit.", "knew you'd say that, {n}.", "good on you, {n}.",
+                        "grand.", "that's what i like to hear, {n}.", "good - we're of a mind, {n}.", "ha, good.", "thought as much, {n}.",
+                        "nice one.", "aye, that's the way.", "good to know, {n}.", "champion."
+                    ]);
                 }
             } catch (e) { line = "ah - never mind, {n}."; }
             queueSay(bot, voiced(bot, line.replace('{n}', name)), opts.delay || 1, speaker);
             return true;
         }
         if (u.yesno === 'no' || u.primary.type === 'deny') {
-            const line = one(["fair enough, {n}.", "no worries, {n}.", "another time, then.", "suit yourself, {n}.", "alright - maybe later."]);
+            const line = one([
+                "fair enough, {n}.", "no worries, {n}.", "another time, then.", "suit yourself, {n}.", "alright - maybe later.",
+                "no bother, {n}.", "ah well. can't win them all.", "your call, {n}.", "fair dos.", "right you are, {n}.",
+                "no harm asking.", "ok, {n}. offer stands, mind.", "understood, {n}.", "as you like, {n}."
+            ]);
             queueSay(bot, voiced(bot, line.replace('{n}', name)), opts.delay || 1, speaker);
             return true;
         }
@@ -20080,31 +20450,80 @@ function resolveExpectationInner(bot, speaker, u, t, opts) {
         const place = u.placeHit ? u.placeHit.kw : null;
         if (ex.about === 'howareyou' || u.primary.type === 'wellbeing') {
             line = u.sentiment < 0
-                ? one(["sorry to hear that, {n}.", "rough, that. hang in there, {n}.", "ah, it'll pass. want some company?"])
-                : u.sentiment > 0 ? one(["good to hear, {n}!", "ha, glad someone's thriving.", "that's what i like to hear."])
-                    : one(["fair enough.", "same old, then.", "can't ask for more than that."]);
+                ? one([
+                    "sorry to hear that, {n}.", "rough, that. hang in there, {n}.", "ah, it'll pass. want some company?",
+                    "that's rubbish, {n}. want some company?", "we all get days like that, {n}.", "chin up, {n}. tomorrow's another day.",
+                    "ugh, sorry {n}. it'll turn round.", "that's a shame, {n}. hang in there.", "bad luck, {n}. it happens.",
+                    "nothing a good scrap won't fix, {n}.", "sorry, {n}. want some company for a bit?", "ah, one of those days. it passes, {n}."
+                ])
+                : u.sentiment > 0 ? one([
+                    "good to hear, {n}!", "ha, glad someone's thriving.", "that's what i like to hear.", "nice one, {n}. long may it last.",
+                    "grand, {n}. keep it that way.", "good on you, {n}.", "someone's doing alright, then.", "ha, lucky you, {n}.",
+                    "that's the stuff, {n}.", "glad it's going well for you.", "good, good. about time one of us was.", "can't beat that, {n}."
+                ])
+                    : one([
+                        "fair enough.", "same old, then.", "can't ask for more than that.", "ticking along, then.",
+                        "ah, middling. i know the feeling.", "could be worse, eh?", "that'll do, {n}.", "fair. no news is good news.",
+                        "steady as she goes, then.", "same here, honestly.", "getting by is half the battle.", "nowt wrong with that, {n}."
+                    ]);
             if (/want some company/.test(line)) { queueSay(bot, voiced(bot, line.replace('{n}', name)), opts.delay || 1, speaker); t.expecting = { kind: 'yesno', action: 'tagalong' }; return true; }
         } else if (ex.about === 'told' && (u.yesno || u.primary.type === 'affirm' || u.primary.type === 'deny') && !skill) {
             line = (u.yesno === 'no' || u.primary.type === 'deny')
-                ? one(["ah well. it'll come, {n}.", "no rush, {n}.", "give it time, {n}."])
-                : one(["good stuff - keep at it, {n}.", "knew you would, {n}.", "nice one, {n}."]);
+                ? one([
+                    "ah well. it'll come, {n}.", "no rush, {n}.", "give it time, {n}.", "these things take a while, {n}.",
+                    "you'll get there, {n}.", "ah, shame. keep at it though, {n}.", "not to worry, {n}. it's not going anywhere.",
+                    "one day, {n}. one day.", "plenty of time yet, {n}.", "bad luck, {n}. next time.", "nothing worth doing comes quick, {n}."
+                ])
+                : one([
+                    "good stuff - keep at it, {n}.", "knew you would, {n}.", "nice one, {n}.", "ha, told you it'd come, {n}.",
+                    "well in, {n}!", "that's the way, {n}.", "good going, {n}.", "look at you go, {n}.",
+                    "cracking, {n}. what's next?", "never doubted you, {n}.", "grand - that's progress, {n}."
+                ]);
         } else if (skill) {
             line = skillRemark(bot, skill, name);
             queueSay(bot, voiced(bot, line), opts.delay || 1, speaker);
             if (personality.of(bot).sociability > 0.45 && Math.random() < 0.5 && !bot.opponent) {
-                queueSay(bot, voiced(bot, one(["mind if i tag along?", "room for one more?", "want a hand with that?"])), (opts.delay || 1) + 2, speaker);
+                queueSay(bot, voiced(bot, one([
+                    "mind if i tag along?", "room for one more?", "want a hand with that?", "fancy some company?",
+                    "could i join you for a bit?", "mind some company?", "want a partner for that?", "shall i come along?",
+                    "any room for me?", "could use a change - mind if i join?", "want someone to share the spot with?", "would you have me along?"
+                ])), (opts.delay || 1) + 2, speaker);
                 t.expecting = { kind: 'yesno', action: 'tagalong' };
             }
             return true;
         } else if (place) {
-            line = one(["the " + place + "? watch yourself out that way.", "ah, the " + place + ". not a bad shout.", "the " + place + " - i know it well."]);
+            line = one([
+                placeName(place) + "? watch yourself out that way.", "ah, " + placeName(place) + ". not a bad shout.",
+                placeName(place) + " - i know it well.", placeName(place) + "? been a while since i was out that way.",
+                "not a bad walk to " + placeName(place) + ".", placeName(place) + ", eh? mind the locals.",
+                "i've had a few close calls round " + placeName(place) + ".", placeName(place) + "? good pick.",
+                "there's worse places than " + placeName(place) + ".", placeName(place) + " - take some food.",
+                "ah, " + placeName(place) + ". haven't been in ages.", placeName(place) + "? say hello to the bank for me."
+            ]);
         } else if (u.primary.type === 'statement' || u.primary.type === 'affirm' || u.primary.type === 'deny') {
             line = u.sentiment < 0
-                ? one(["that's a shame.", "sorry to hear it, {n}.", "hm. that's rough."])
-                : one(["fair enough, {n}.", "ah, nice.", "sounds about right.", "good to know."]);
+                ? one([
+                    "that's a shame.", "sorry to hear it, {n}.", "hm. that's rough.", "ah, bad luck, {n}.", "that's not on.",
+                    "ugh. sorry, {n}.", "well, that's rubbish.", "unlucky, {n}.", "it happens. doesn't make it better, mind.",
+                    "rotten luck, that.", "ah, {n}. that's a pain.", "not what you wanted, i bet."
+                ])
+                : one([
+                    "fair enough, {n}.", "ah, nice.", "sounds about right.", "good to know.", "right you are.", "aye, makes sense.",
+                    "ha, fair.", "can't argue with that.", "i'll take your word for it, {n}.", "that figures.", "good stuff.",
+                    "well, there you go.", "noted, {n}.", "ah, i see.", "fair dos.", "that's the way of it.", "interesting, that.",
+                    "so i've heard.", "hm, fair point.", "wouldn't have guessed, {n}."
+                ]);
             if (ex.about === 'news') {
                 const mine = newsLine(bot, 3000);
-                if (mine && Math.random() < 0.5) line = join(line, one(["i had one of those days too - ", "me, ", "funny you say that. "]) + mine);
+                if (mine && Math.random() < 0.5) line = join(line, one([
+                    "i had one of those days too - ", "me, ", "funny you say that. ", "same sort of thing here - ", "snap. ",
+                    "ha, likewise - ", "you and me both. ", "that reminds me - ", "speaking of which, ", "as it happens, ",
+                    "on my end, ", "tell you what happened to me - "
+                ]) + mine);
+            } else if (ex.about === 'topic' && t.topic && Math.random() < 0.6) {
+                // an answer about the subject gets the bot's own word on it
+                const r = topicRemark(bot, t.topic);
+                if (r) line = join(line, r);
             }
         }
         if (line) { queueSay(bot, voiced(bot, line.replace('{n}', name)), opts.delay || 1, speaker); return true; }
@@ -20158,23 +20577,72 @@ function notice(bot, partner, mem) {
     const out = [];
     const myCl = bot.getCombatLevel ? bot.getCombatLevel() : (bot.combatLevel || 3);
     const cl = partner.getCombatLevel ? partner.getCombatLevel() : (partner.combatLevel || 0);
-    if (mem && mem.lastLevel && cl >= mem.lastLevel + 3 && mem.met > 1) out.push({ w: 3, text: "you've come on since we last spoke - level " + cl + " now?" });
+    if (mem && mem.lastLevel && cl >= mem.lastLevel + 3 && mem.met > 1) out.push({ w: 3, text: one([
+        "you've come on since we last spoke - level " + cl + " now?", "level " + cl + " already? you've been busy.",
+        "hang on, level " + cl + "? you were lower last time.", "someone's been training - level " + cl + "?",
+        "look at you, level " + cl + ". what happened?", "you've shot up - " + cl + " now, is it?",
+        "level " + cl + "? you've been grafting since we spoke.", "up to " + cl + " already? fair play.",
+        "you've put some levels on - " + cl + " now?", "is that level " + cl + "? you've come on a way."
+    ]) });
     const w = weaponName(partner);
-    if (w && Math.random() < 0.6) out.push({ w: 2, text: one(["nice " + w + ".", "that " + w + " looks the part.", "where'd you get the " + w + "?"]) });
+    if (w && Math.random() < 0.6) out.push({ w: 2, text: one([
+        "nice " + w + ".", "that " + w + " looks the part.", "where'd you get the " + w + "?", "a " + w + ", eh? not bad.",
+        "that's a decent " + w + ".", "i like the " + w + ".", "is that " + w + " any good?", "how much was the " + w + "?",
+        "smart " + w + ", that.", "that " + w + " seen much use?", "you handy with that " + w + "?", "a " + w + " suits you.",
+        "haven't seen a " + w + " like that in a while.", "that " + w + " must have cost a bit."
+    ]) });
     const a = armourName(partner);
-    if (a && Math.random() < 0.4) out.push({ w: 1, text: "smart bit of " + a + ", that." });
-    if (cl && cl >= myCl + 15) out.push({ w: 2, text: one(["you're well above my weight - level " + cl + "?", "level " + cl + "! remind me not to cross you."]) });
-    else if (cl && cl <= myCl - 15 && cl > 0) out.push({ w: 1, text: one(["still finding your feet? stick to cows for a bit.", "new around here? shout if you need a hand."]) });
-    if (partner.opponent) out.push({ w: 3, text: "careful - you've got company." });
-    else if (partner.gatheringSkill) out.push({ w: 2, text: one(["hard at it, i see.", "still grafting away?"]) });
-    else if (partner.walkQueue && partner.walkQueue.length) out.push({ w: 1, text: "off somewhere?" });
+    if (a && Math.random() < 0.4) out.push({ w: 1, text: one([
+        "smart bit of " + a + ", that.", "nice " + a + ".", "that " + a + " looks solid.", "where'd you pick up the " + a + "?",
+        "the " + a + " suits you.", "is that " + a + " heavy?", "good " + a + ", that. keeps the arrows off.",
+        "i had a " + a + " like that once.", "that " + a + " seen many fights?", "you've done well for a " + a + "."
+    ]) });
+    if (cl && cl >= myCl + 15) out.push({ w: 2, text: one([
+        "you're well above my weight - level " + cl + "?", "level " + cl + "! remind me not to cross you.",
+        "level " + cl + "? i'll stay on your good side.", "blimey, level " + cl + ". i'm nowhere near.",
+        "you'd flatten me - level " + cl + ", is it?", "level " + cl + ". i've a way to go to catch you.",
+        "a " + cl + "? you must have some stories.", "level " + cl + " - what do you even train on?",
+        "i'd not want to meet you in the wilderness, level " + cl + ".", "level " + cl + "? teach me your ways."
+    ]) });
+    else if (cl && cl <= myCl - 15 && cl > 0) out.push({ w: 1, text: one([
+        "still finding your feet? stick to cows for a bit.", "new around here? shout if you need a hand.",
+        "just starting out? goblins are good for a few levels.", "early days for you, eh? it gets easier.",
+        "you're new-ish, i take it. mind the dark wizards.", "starting out? get some food before you fight anything.",
+        "fresh face, eh? the chickens by Lumbridge are a soft start.", "not long started? the cows south of Falador are safe.",
+        "new to it? don't wander north, whatever you do.", "just beginning? don't be shy about asking for help."
+    ]) });
+    if (partner.opponent) out.push({ w: 3, text: one([
+        "careful - you've got company.", "mind yourself, that one's on you.", "you've got a scrap on your hands there.",
+        "watch it, something's having a go at you.", "you're being had at - eat if you need to.", "that's got its eye on you, mind.",
+        "heads up, you've picked up a fight.", "oi, you've got one on you.", "you're in a fight, in case you missed it.",
+        "keep your guard up, it's still on you."
+    ]) });
+    else if (partner.gatheringSkill) out.push({ w: 2, text: one([
+        "hard at it, i see.", "still grafting away?", "busy, busy.", "no rest for you, then.", "grinding it out, eh?",
+        "keeping your hands busy, i see.", "you're going at that.", "someone's earning their keep.", "still at it, then?",
+        "that's the spirit - keep at it.", "look at you, working away.", "you don't stop, do you?"
+    ]) });
+    else if (partner.walkQueue && partner.walkQueue.length) out.push({ w: 1, text: one([
+        "off somewhere?", "on your way somewhere?", "where are you headed?", "somewhere to be?", "going far?",
+        "heading out, are you?", "where's the rush?", "off on an errand?", "where are you off to?", "passing through?"
+    ]) });
     try {
         const hits = partner.skills && partner.skills.hits;
-        if (hits && hits.current < hits.base * 0.4) out.push({ w: 4, text: "you look hurt - got any food on you?" });
+        if (hits && hits.current < hits.base * 0.4) out.push({ w: 4, text: one([
+            "you look hurt - got any food on you?", "you're looking rough - eat something.", "you're low, mind. got food?",
+            "you want to eat, you're half dead.", "careful, you've not got much left in you.", "get some food down you, you're low.",
+            "you look like you've been through it - any food?", "you're in a bad way - need something to eat?",
+            "eat before you fight anything else, you're low.", "you alright? you look like you've had a beating."
+        ]) });
     } catch (e) {  }
     try {
         const region = knowledge.regionOf(partner.x, partner.y);
-        if (region && Math.random() < 0.3) out.push({ w: 1, text: "what brings you to " + region + "?" });
+        if (region && Math.random() < 0.3) out.push({ w: 1, text: one([
+            "what brings you to " + region + "?", "you often round " + region + "?", "what are you doing in " + region + "?",
+            "not seen you in " + region + " before.", "you live round " + region + "?", "what's brought you out to " + region + "?",
+            "here for anything in particular in " + region + "?", "you stopping in " + region + " long?",
+            "first time in " + region + "?", "how'd you end up in " + region + "?"
+        ]) });
     } catch (e) {  }
     if (!out.length) return null;
     let total = 0; for (const o of out) total += o.w;
@@ -20210,14 +20678,122 @@ function join(a, b) {
     return (/[.!?]$/.test(s) ? s : s + '.') + ' ' + b.trim();
 }
 
+// one follow-up question per subject
+function topicFollowUp(bot, topic) {
+    if (!topic || !topic.name) return null;
+    const n = topic.name;
+    switch (topic.kind) {
+        case 'skill': return one([
+            "what level are you at with " + n + "?", "where do you go for " + n + "?", "how long have you been at " + n + "?",
+            "any good spots for " + n + "?", "is " + n + " paying for you?", "what got you into " + n + "?",
+            "you enjoy " + n + " or just grinding it?", "what are you aiming for in " + n + "?", "any tips for " + n + "?",
+            "is " + n + " slow going for you too?", "what do you use for " + n + "?", "you do " + n + " for the coin or the levels?",
+            "does " + n + " ever get boring?", "who taught you " + n + "?", "what's the best bit of " + n + "?",
+            "how much " + n + " do you do in a day?", "do you sell what you get from " + n + "?", "is " + n + " worth the effort, honestly?",
+            "what's your next goal in " + n + "?", "any secret spots for " + n + "?"
+        ]);
+        case 'npc': return one([
+            "ever fought a " + n + " yourself?", "what do " + n + "s drop, do you know?", "where do you find " + n + "s?",
+            "how do you fare against a " + n + "?", "what's the trick with a " + n + "?", "are " + n + "s worth the trouble?",
+            "what level do you need for a " + n + "?", "do " + n + "s hit hard?", "how many " + n + "s have you done?",
+            "ever had a " + n + " turn on you?", "would you take a " + n + " on alone?", "what do you bring for a " + n + "?",
+            "is a " + n + " good for training?", "seen many " + n + "s about?", "what's the best weapon on a " + n + "?",
+            "do " + n + "s come in packs?"
+        ]);
+        case 'item': return one([
+            "what did you pay for the " + n + "?", "you using the " + n + " or selling it?", "where'd you get the " + n + "?",
+            "any good, the " + n + "?", "what would you take for the " + n + "?", "is the " + n + " worth having?",
+            "how long have you had the " + n + "?", "do you need the " + n + " or is it spare?", "would you sell the " + n + "?",
+            "what's a " + n + " go for these days?", "is the " + n + " hard to come by?", "did you make the " + n + " yourself?",
+            "what do you use the " + n + " for?", "how many " + n + "s have you got?", "is the " + n + " better than what you had?",
+            "who sold you the " + n + "?"
+        ]);
+        case 'place': return one([
+            "been to " + n + " much?", "what's " + n + " like these days?", "anything worth doing round " + n + "?",
+            "you based near " + n + "?", "is " + n + " busy at the moment?", "what takes you to " + n + "?",
+            "where do you bank when you're in " + n + "?", "is " + n + " safe enough?", "what's the best thing about " + n + "?",
+            "any decent shops in " + n + "?", "how far is " + n + " from here, do you reckon?", "do you know " + n + " well?",
+            "what's the worst bit of " + n + "?", "ever get lost in " + n + "?", "is there much to fight round " + n + "?",
+            "would you live in " + n + "?"
+        ]);
+        case 'quest': return one([
+            "how far into " + n + " are you?", "done " + n + " yet?", "what's " + n + " like? worth it?", "is " + n + " hard?",
+            "what do you get for " + n + "?", "who starts " + n + "?", "any tips for " + n + "?", "is " + n + " long?",
+            "what's the worst part of " + n + "?", "did " + n + " need much fighting?", "is " + n + " one for a beginner?",
+            "what got you started on " + n + "?", "do you need anything special for " + n + "?", "would you do " + n + " again?",
+            "is " + n + " worth the walking?", "how long did " + n + " take you?"
+        ]);
+        case 'activity': return one([
+            "how's it paying?", "good spot for it?", "been at it long today?", "getting anywhere with it?",
+            "what are you after from it?", "is it going well?", "any luck with it so far?", "what's the plan after that?",
+            "is it slow going?", "worth the effort?", "how long will you keep at it?", "do you enjoy it or is it a grind?",
+            "what's the goal with it?", "is it busy where you are?", "any trouble with it?", "how'd you get into that?"
+        ]);
+        default: return null;
+    }
+}
+// the bot's own word on the subject
+function topicRemark(bot, topic) {
+    if (!topic || !topic.name) return null;
+    const n = topic.name;
+    try {
+        if (topic.kind === 'skill') return skillRemark(bot, n);
+        if (topic.kind === 'npc') return opinionLine(bot, { entities: { skills: [], npcs: [{ name: n, id: topic.id }], items: [] } });
+        if (topic.kind === 'item') { const k = knowledge.answer(bot, 'what is a ' + n); if (k && k.text) return k.text; }
+        if (topic.kind === 'place') {
+            let c = null; try { c = require('./context').describe(bot); } catch (e) { c = null; }
+            if (c && c.region && c.region.name && c.region.name.toLowerCase() === String(n).toLowerCase()) return one([
+                "we're stood in it, near enough.", "this is " + n + ", give or take.", "you're in " + n + " now, more or less.",
+                "well, look around - this is " + n + ".", n + "? you're stood in it.", "this is it. " + n + ", such as it is.",
+                "we're in " + n + " right now, near enough.", "you've found " + n + " already - it's here.",
+                "this is " + n + ", give or take a field.", "you're not far off - this is " + n + "."
+            ]);
+            return one([
+                "i pass through " + n + " now and then.", n + "? not been in a while.", "know " + n + " a bit. it's alright.",
+                "i've had good days and bad in " + n + ".", n + "'s alright if you know where to look.", "i keep meaning to go back to " + n + ".",
+                n + "? decent enough, bit out of the way.", "i learned a lot the hard way round " + n + ".",
+                "i've banked in " + n + " more times than i can count.", n + " - good for a visit, wouldn't stay.",
+                "used to spend a lot of time in " + n + ".", "you'll meet all sorts in " + n + ".", n + "? watch your pockets there.",
+                "i've a soft spot for " + n + "."
+            ]);
+        }
+        if (topic.kind === 'quest') return one([
+            "quests pay well if you see them through.", "the talking's the hard part of a quest.", "i take a quest when it's on my way.",
+            "half a quest is the walking, honestly.", "quests are grand until you lose the item you need.",
+            "i like a quest with a proper reward at the end.", "nothing beats finishing a quest you'd given up on.",
+            "quests are where the good gear comes from.", "i always end up reading the same book twice in a quest.",
+            "a quest's a good excuse to see somewhere new.", "some quests want more patience than skill.",
+            "i keep a list of quests and never finish it.", "the best quests are the ones with a fight at the end.",
+            "quests are fine, so long as nobody's rushing me."
+        ]);
+    } catch (e) { return null; }
+    return null;
+}
+
 function moodLine(bot) {
     const m = mood.of(bot);
     const act = hearing.activityLine(bot, true);
     let core;
-    if (m.valence > 0.62 && m.energy > 0.45) core = one(["can't complain - {act}.", "great, actually. {act}.", "brilliant! {act}.", "never better. {act}."]);
-    else if (m.valence < 0.38) core = one(["been better, honestly.", "bit fed up today.", "rough one, but i'll live.", "not my best day."]);
-    else if (m.energy < 0.35) core = one(["knackered, but fine.", "tired — been at it all day.", "could use a sit down, otherwise fine."]);
-    else core = one(["not bad. {act}.", "alright, you know — {act}.", "getting by. {act}.", "fine, ta. {act}."]);
+    if (m.valence > 0.62 && m.energy > 0.45) core = one([
+        "can't complain - {act}.", "great, actually. {act}.", "brilliant! {act}.", "never better. {act}.", "grand, ta. {act}.",
+        "smashing, honestly - {act}.", "top form today. {act}.", "really good, cheers. {act}.", "flying, actually. {act}.",
+        "very well, thanks. {act}.", "champion. {act}.", "chuffed, to be honest. {act}.", "good as gold. {act}.", "couldn't be better - {act}."
+    ]);
+    else if (m.valence < 0.38) core = one([
+        "been better, honestly.", "bit fed up today.", "rough one, but i'll live.", "not my best day.", "meh. one of those days.",
+        "bit down, if i'm honest.", "not great. i'll manage.", "so-so. don't ask.", "could be worse. mostly it's worse.",
+        "having a bad run of it.", "bit of a slog today.", "surviving. just about.", "not brilliant, truth be told.", "ask me tomorrow."
+    ]);
+    else if (m.energy < 0.35) core = one([
+        "knackered, but fine.", "tired - been at it all day.", "could use a sit down, otherwise fine.", "shattered, honestly.",
+        "running on fumes, but alright.", "dead on my feet. fine though.", "worn out. long day.", "bit weary, nothing a rest won't fix.",
+        "half asleep, to be honest.", "tired but happy enough.", "yawning my head off, otherwise ok.", "done in. still standing, mind."
+    ]);
+    else core = one([
+        "not bad. {act}.", "alright, you know - {act}.", "getting by. {act}.", "fine, ta. {act}.", "same as ever. {act}.",
+        "ok, cheers. {act}.", "ticking along. {act}.", "can't grumble. {act}.", "fair to middling. {act}.", "fine, fine. {act}.",
+        "alright, thanks. {act}.", "not so bad. {act}.", "muddling through. {act}.", "steady. {act}."
+    ]);
     let line = core.replace('{act}', act || 'keeping busy');
     // the reason behind the mood, when something real is behind it
     if (episodes && Math.random() < 0.6) {
@@ -20240,7 +20816,7 @@ function newsLine(bot, sinceTicks) {
 }
 
 const SKILL_TASTE = {
-    fishing: ['fishing', 'diligence', "peaceful, that — and it feeds you"], mining: ['mining', 'diligence', "good coin in ore if you stick at it"],
+    fishing: ['fishing', 'diligence', "peaceful, that - and it feeds you"], mining: ['mining', 'diligence', "good coin in ore if you stick at it"],
     woodcutting: ['chopping', 'diligence', "honest work, and the logs sell"], smithing: ['smithing', 'greed', "the anvil pays if you've the ore"],
     cooking: ['cooking', 'diligence', "burn less as you go"], crafting: ['crafting', 'greed', "fiddly but it pays"],
     magic: ['magic', 'curiosity', "runes cost, but the power's worth it"], ranged: ['ranged', 'curiosity', "keep your distance and they never touch you"],
@@ -20254,11 +20830,28 @@ const SKILL_TASTE = {
 function skillRemark(bot, skill, name) {
     const p = personality.of(bot);
     const tag = SKILL_TASTE[skill];
-    if (!tag) return one(["fair enough.", "each to their own."]);
+    if (!tag) return one([
+        "fair enough.", "each to their own.", "can't say i know much about it.", "if it works for you.", "never tried it myself.",
+        "sounds like a way to pass the day.", "not one i've looked into.", "you'd know better than me.", "fair play to you.",
+        "there's worse things to be at."
+    ]);
     const like = (p[tag[1]] || 0.5) > 0.5;
     return like
-        ? one(["ah, " + tag[0] + " — " + tag[2] + ".", tag[0] + "? good choice. " + tag[2] + ".", "i love a bit of " + tag[0] + "."])
-        : one([tag[0] + "'s not really my thing, but " + tag[2] + ".", "rather you than me with " + tag[0] + ".", tag[0] + ", eh? i can't sit still for it."]);
+        ? one([
+            "ah, " + tag[0] + " - " + tag[2] + ".", tag[0] + "? good choice. " + tag[2] + ".", "i love a bit of " + tag[0] + ".",
+            "can't beat " + tag[0] + ". " + tag[2] + ".", tag[0] + "'s my favourite, honestly.", "good on you - " + tag[2] + ".",
+            "ah, " + tag[0] + ". " + tag[2] + ", as they say.", "i could do " + tag[0] + " all day.", tag[0] + " - now you're talking.",
+            "nothing wrong with " + tag[0] + ". " + tag[2] + ".", "i'm a " + tag[0] + " sort myself.", tag[0] + "? " + tag[2] + ". you've picked well.",
+            "good shout, " + tag[0] + ". " + tag[2] + ".", "there's worse ways to spend a day than " + tag[0] + "."
+        ])
+        : one([
+            tag[0] + "'s not really my thing, but " + tag[2] + ".", "rather you than me with " + tag[0] + ".", tag[0] + ", eh? i can't sit still for it.",
+            "i never took to " + tag[0] + ", myself.", tag[0] + "? each to their own.", "i'd sooner do anything than " + tag[0] + ".",
+            tag[0] + " bores me stiff, sorry.", "fair play - " + tag[0] + " isn't for me.", "i tried " + tag[0] + " once. never again.",
+            "all yours, " + tag[0] + ". i haven't the patience.", tag[0] + "? " + tag[2] + ", i suppose. not for me though.",
+            "you're a braver soul than me, " + tag[0] + ".", "i leave " + tag[0] + " to the people who like it.",
+            "someone's got to do " + tag[0] + ". glad it's not me."
+        ]);
 }
 function opinionLine(bot, u) {
     const p = personality.of(bot);
@@ -20268,33 +20861,100 @@ function opinionLine(bot, u) {
         const def = knowledge.npcDefs[n.id];
         const cl = def ? Math.floor(((def.attack || 1) + (def.defense || 1) + (def.strength || 1) + (def.hits || 1)) / 4) : 0;
         const mine = bot.getCombatLevel ? bot.getCombatLevel() : 3;
-        if (cl > mine + 10) return one([n.name + "? not something i'd pick a fight with yet.", "a " + n.name + " would flatten me, honestly.", "give " + n.name + "s a wide berth unless you're strong."]);
-        if (cl < Math.max(3, mine - 15)) return one([n.name + "s? easy pickings.", "a " + n.name + " is fine for a laugh.", n.name + "s don't put up much of a fight."]);
-        return one(["a " + n.name + " is a fair fight for someone like me.", n.name + "s? decent scrap, decent drops."]);
+        if (cl > mine + 10) return one([
+            n.name + "? not something i'd pick a fight with yet.", "a " + n.name + " would flatten me, honestly.",
+            "give " + n.name + "s a wide berth unless you're strong.", "i'm not ready for a " + n.name + ", not yet.",
+            "a " + n.name + "? i'd be food.", n.name + "s scare me, if i'm honest.", "one day i'll take a " + n.name + ". not today.",
+            "i've seen what a " + n.name + " does. no thanks.", "a " + n.name + " is a few levels off for me.",
+            "you'd want good armour for a " + n.name + ".", "i'd rather not meet a " + n.name + " down a corridor.",
+            "the " + n.name + " can keep its corner for now."
+        ]);
+        if (cl < Math.max(3, mine - 15)) return one([
+            n.name + "s? easy pickings.", "a " + n.name + " is fine for a laugh.", n.name + "s don't put up much of a fight.",
+            "i could do " + n.name + "s in my sleep.", "a " + n.name + "? barely worth the walk.", n.name + "s are good for a warm-up.",
+            "i've outgrown " + n.name + "s, honestly.", "a " + n.name + " hardly touches me these days.", n.name + "s? fine for a beginner.",
+            "no trouble from a " + n.name + " at my level.", "a " + n.name + " is a free kill, near enough.", n.name + "s go down in a hit or two."
+        ]);
+        return one([
+            "a " + n.name + " is a fair fight for someone like me.", n.name + "s? decent scrap, decent drops.",
+            "a " + n.name + " keeps me honest.", "i can handle a " + n.name + ", just about.", n.name + "s are about my level, yeah.",
+            "a " + n.name + " is worth the fight, mostly.", "i take food for a " + n.name + " but i win.", n.name + "s? a fair go.",
+            "a " + n.name + " gives me a proper workout.", "i've killed my share of " + n.name + "s. lost to a few too.",
+            n.name + "s are good training for me right now.", "a " + n.name + " - even money, that one."
+        ]);
     }
     if (u.entities.items.length) {
         const it = u.entities.items[0];
         const def = knowledge.itemDefs[it.id];
         const worth = def && def.price ? def.price : 0;
-        if (worth > 1000) return one(["a " + it.name + "? worth a pretty penny, that.", "nice piece, the " + it.name + ".", "i'd keep a " + it.name + " safe in the bank."]);
-        return one(["a " + it.name + "? does the job.", "can't go wrong with a " + it.name + " early on.", "meh - a " + it.name + " is fine until you find better."]);
+        if (/^coins?$/i.test(it.name)) return one([
+            "coin's coin. never enough of it.", "can't argue with coins.", "more coins is never a bad thing.",
+            "coins? always short of them.", "i like coins. coins are good.", "gp makes the world go round.",
+            "you can never have too many coins.", "coins go out faster than they come in.", "money talks, as they say.",
+            "coins buy food, food keeps me alive. simple."
+        ]);
+        if (worth > 1000) return one([
+            "a " + it.name + "? worth a pretty penny, that.", "nice piece, the " + it.name + ".", "i'd keep a " + it.name + " safe in the bank.",
+            "a " + it.name + " is serious kit.", "don't die with a " + it.name + " on you.", "a " + it.name + "? you've done alright.",
+            "i'd give a lot for a " + it.name + ".", "a " + it.name + " - now that's an item.", "the " + it.name + " holds its value.",
+            "a " + it.name + " is a step up from what i've got.", "people would trade well for a " + it.name + ".", "a " + it.name + "? lucky you."
+        ]);
+        return one([
+            "a " + it.name + "? does the job.", "can't go wrong with a " + it.name + " early on.", "meh - a " + it.name + " is fine until you find better.",
+            "a " + it.name + " is a " + it.name + ". nothing fancy.", "i've a few " + it.name + "s in the bank myself.",
+            "a " + it.name + "? cheap and cheerful.", "the " + it.name + " gets you started, at least.", "not much to say about a " + it.name + ".",
+            "a " + it.name + " won't win you any prizes.", "you'll move on from a " + it.name + " soon enough.",
+            "a " + it.name + " is handy to have about.", "the " + it.name + " is fine. don't overthink it."
+        ]);
     }
-    if (u.placeHit) return one(["the " + u.placeHit.kw + "? decent spot.", "i like the " + u.placeHit.kw + " well enough.", "the " + u.placeHit.kw + " gets busy, mind."]);
-    if (u.boss) return one([u.boss.name + "? one day, maybe.", "i'd want a few more levels before " + u.boss.name + "."]);
-    return p.curiosity > 0.5 ? one(["i'm all for it.", "sounds good to me.", "could be worth a look."]) : one(["not sure, honestly.", "i've no strong feelings on it.", "depends on the day."]);
+    if (u.placeHit) { const pl = placeName(u.placeHit.kw); return one([
+        pl + "? decent spot.", "i like " + pl + " well enough.", pl + " gets busy, mind.", pl + "? good for a bank run.",
+        "i've spent too long in " + pl + ".", pl + " is alright once you know it.", "not much wrong with " + pl + ".",
+        pl + "? watch the crowds.", "i'd happily go back to " + pl + ".", pl + " has its moments.", pl + "? bit of a trek, but fine.",
+        "you'll do alright in " + pl + "."
+    ]); }
+    if (u.boss) return one([
+        u.boss.name + "? one day, maybe.", "i'd want a few more levels before " + u.boss.name + ".", u.boss.name + " is out of my league for now.",
+        "i'm not touching " + u.boss.name + " without a party.", u.boss.name + "? i'd need better gear.", "people talk big about " + u.boss.name + ". i don't.",
+        u.boss.name + " has done for better than me.", "give me a year and i'll think about " + u.boss.name + ".",
+        u.boss.name + "? bring food. lots of food.", "i've heard the stories about " + u.boss.name + ". no rush."
+    ]);
+    return p.curiosity > 0.5 ? one([
+        "i'm all for it.", "sounds good to me.", "could be worth a look.", "i'd give it a go.", "why not, eh?", "count me interested.",
+        "sounds alright to me.", "i'd not say no.", "worth a try, i reckon.", "i like the sound of that."
+    ]) : one([
+        "not sure, honestly.", "i've no strong feelings on it.", "depends on the day.", "couldn't say.", "hard to say, really.",
+        "i'd have to think about it.", "no opinion either way.", "maybe. maybe not.", "ask me another.", "i'm on the fence."
+    ]);
 }
 
 function homeLine(bot) {
     let region = null;
     try { region = knowledge.regionOf(bot.x, bot.y); } catch (e) { region = null; }
-    return region ? one(["these parts — " + region + ", mostly.", "i've knocked about " + region + " for as long as i remember.", "around " + region + ". never strayed far."])
-        : one(["here and there.", "all over, really.", "nowhere in particular."]);
+    return region ? one([
+        "these parts - " + region + ", mostly.", "i've knocked about " + region + " for as long as i remember.", "around " + region + ". never strayed far.",
+        region + ", born and bred.", "round " + region + ", give or take.", "i call " + region + " home, more or less.",
+        region + ". not that i'm ever there.", "here - " + region + ". it's not much but it's mine.", "i'm a " + region + " sort.",
+        region + ", though i wander.", "you're looking at it - " + region + ".", "i've a bank in " + region + " and that's home enough."
+    ]) : one([
+        "here and there.", "all over, really.", "nowhere in particular.", "wherever i put my pack down.", "bit of everywhere.",
+        "no fixed abode, me.", "the road, mostly.", "wherever there's a bank.", "hard to say. i move about.", "nowhere you'd know."
+    ]);
 }
 function selfLine(bot) {
     const who = nameOf(bot);
     let title = null;
     try { title = require('./titles').titleOf(bot); } catch (e) { title = null; }
-    return title ? "i'm " + who + ", " + title + "." : "i'm " + who + ". and you?";
+    return title ? one([
+        "i'm " + who + ", " + title + ".", who + ". " + title + ", they call me.", "the name's " + who + " - " + title + ".",
+        who + ", " + title + ". and you?", "me? " + who + ", " + title + ".", "i'm " + who + ". " + title + ", if you like titles.",
+        who + " here - " + title + ". and you?", "you're talking to " + who + ", " + title + ".", "i go by " + who + ". " + title + ", to some.",
+        who + ". some call me " + title + ".", "it's " + who + ", " + title + ". yourself?"
+    ]) : one([
+        "i'm " + who + ". and you?", "the name's " + who + ". you?", who + ". who's asking?", "me? " + who + ". and yourself?",
+        "just " + who + ". nobody special.", who + ", pleased to meet you. you?", "i go by " + who + ". yourself?", who + ". you are?",
+        "it's " + who + ". and you'd be?", "they call me " + who + ". you?"
+    ]);
 }
 
 // the reply plan for a conversational act -> { line, expecting, close }.
@@ -20317,12 +20977,28 @@ function planReply(bot, speaker, u, t, mem, opts) {
         const lead = one([
             "welcome, {n}! everyone starts somewhere.",
             "ah, a fresh face - welcome, {n}!",
-            "new here? you'll get the hang of it, {n}."
+            "new here? you'll get the hang of it, {n}.",
+            "welcome to it, {n}. we were all new once.",
+            "good to have you, {n}. it's a big old place.",
+            "a newcomer! welcome, {n}.",
+            "hello {n}, and welcome. don't mind the goblins.",
+            "new blood - welcome aboard, {n}.",
+            "welcome, {n}. you've picked a fine place to start.",
+            "ah, just starting, {n}? you're in for a treat.",
+            "welcome, {n}. mind the dark wizards south of Varrock.",
+            "hiya {n}. new, eh? you'll do fine."
         ]).replace('{n}', name);
         const forks = one([
             "what do you fancy training first?",
             "want a tip for making some starting coin?",
-            "ask me anything - where to fish, mine, that sort of thing."
+            "ask me anything - where to fish, mine, that sort of thing.",
+            "what do you want to be - fighter, miner, fisher?",
+            "want to know where the easy coin is?",
+            "anything you're stuck on? shout.",
+            "what are you looking to get into?",
+            "want a hand finding your feet?",
+            "fancy a pointer on where to start?",
+            "any questions? i've been round the block."
         ]);
         line = join(voiced(bot, lead + (tip && tip.text ? ' ' + tip.text : '')), voiced(bot, forks));
         return { line, expecting: { kind: 'free', about: 'newbie' }, close: false };
@@ -20330,13 +21006,22 @@ function planReply(bot, speaker, u, t, mem, opts) {
 
     // good luck / have fun / take care -> reciprocate and close
     if (/\b(good luck|gl hf|gl\b|have fun|enjoy yourself|take care|safe travels|happy hunting)\b/.test(saidFull)) {
-        return { line: voiced(bot, one(["you too, {n}!", "cheers, {n} -- you too!", "thanks, same to you, {n}!"]).replace('{n}', name)), close: true };
+        return { line: voiced(bot, one([
+            "you too, {n}!", "cheers, {n} - you too!", "thanks, same to you, {n}!", "and you, {n}. mind how you go.",
+            "ta, {n}. same to you.", "likewise, {n}!", "you as well, {n}. stay out of trouble.", "cheers {n}, and yourself!",
+            "back at you, {n}.", "thanks {n}. don't die out there.", "same to you, {n}. see you about.", "and to you, {n}!"
+        ]).replace('{n}', name)), close: true };
     }
 
     // add me / be my friend -> a warm yes
     if (/\b(add me|be my friend|be friends|can we be friends|add you back|friend request)\b/.test(saidFull)) {
         try { social.noteInteraction(bot, speaker.username, 1); } catch (e) {  }
-        return { line: voiced(bot, one(["sure, {n} -- good to know you!", "aye, consider us mates, {n}!", "of course, {n}. see you around!"]).replace('{n}', name)) };
+        return { line: voiced(bot, one([
+            "sure, {n} - good to know you!", "aye, consider us mates, {n}!", "of course, {n}. see you around!", "gladly, {n}!",
+            "course, {n}. always room for another mate.", "done, {n}. you're on the list.", "ha, sure {n}. friends it is.",
+            "why not, {n}. good to have you.", "aye, go on then, {n}!", "you're alright, {n}. mates it is.",
+            "sure thing, {n}. shout whenever.", "of course, {n}. i'll keep an eye out for you."
+        ]).replace('{n}', name)) };
     }
 
     // "can i join your clan?" -> welcome them if in one, else say so honestly.
@@ -20346,7 +21031,12 @@ function planReply(bot, speaker, u, t, mem, opts) {
         if (mine) {
             return { line: voiced(bot, "we're " + mine.name + " -- ::joinclan " + mine.name + " and i'll wave you in.") };
         }
-        return { line: voiced(bot, one(["i'm not in a clan myself, sorry.", "no clan for me right now.", "you'd have to find a clan with a spot -- try the Find list."])) };
+        return { line: voiced(bot, one([
+            "i'm not in a clan myself, sorry.", "no clan for me right now.", "you'd have to find a clan with a spot - try the Find list.",
+            "no clan here, i'm afraid. i go my own way.", "i've no clan to offer, sorry.", "not in one, {n}. can't help you there.",
+            "clanless, me. try the Find list.", "i'd let you in if i had one. i don't.", "no clan, sorry. i keep my own company.",
+            "not me - i've never joined one."
+        ]).replace('{n}', name)) };
     }
 
     // "seen <name>?" -> point them out if nearby; "seen anyone?" gets a vibe.
@@ -20358,10 +21048,19 @@ function planReply(bot, speaker, u, t, mem, opts) {
             }
         } catch (e) {  }
         if (near) {
-            return { line: voiced(bot, one([near.username + "? right over there.", "aye, " + near.username + "'s about -- just here.", near.username + "'s nearby, yeah."])) };
+            return { line: voiced(bot, one([
+                near.username + "? right over there.", "aye, " + near.username + "'s about - just here.", near.username + "'s nearby, yeah.",
+                "yeah, " + near.username + " is stood right there.", near.username + "? look around, they're close.",
+                "just seen " + near.username + " - a few steps off.", near.username + " is about, aye.", "yep, " + near.username + "'s here.",
+                near.username + "? not gone far.", "there - " + near.username + ", by you."
+            ])) };
         }
         if (/\b(seen|spotted) (anyone|anybody|any1|people|players|folk)\b/.test(saidFull)) {
-            return { line: voiced(bot, one(["a few folk about, yeah.", "aye, it's not quiet round here.", "some, here and there."])) };
+            return { line: voiced(bot, one([
+                "a few folk about, yeah.", "aye, it's not quiet round here.", "some, here and there.", "the usual faces.",
+                "a handful. nobody you'd write home about.", "plenty, if you count me.", "a few passing through.",
+                "it's been busy enough today.", "one or two. quiet, mostly.", "aye, people come and go."
+            ])) };
         }
     }
 
@@ -20371,22 +21070,39 @@ function planReply(bot, speaker, u, t, mem, opts) {
             const toldBack = human && !repeat ? recallTold(bot, speaker.username, 9000) : null;
             if (repeat) line = gen(bot, 'reactRepeatGreet', { name });
             else if (toldBack && nowTick(bot) - toldBack.tick > 60 && Math.random() < 0.75) {
-                line = voiced(bot, join(one(["{n}!", "back again, {n}?", "oh, it's you, {n}."]).replace('{n}', name), toldQuestion(bot, toldBack, name, false)));
+                line = voiced(bot, join(one([
+                    "{n}!", "back again, {n}?", "oh, it's you, {n}.", "ah, {n}.", "hello again, {n}.", "{n}, hello.",
+                    "there you are, {n}.", "well, if it isn't {n}.", "{n}! good timing.", "alright, {n}."
+                ]).replace('{n}', name), toldQuestion(bot, toldBack, name, false)));
                 expecting = { kind: 'free', about: 'told' };
             }
-            else if (mem && mem.met > 1 && nowTick(bot) - (mem.lastSeen || 0) > 300 && Math.random() < 0.5) line = voiced(bot, one(["back again, {n}?", "{n}! good to see you again.", "oh, it's you, {n}. how've you been?"]).replace('{n}', name));
+            else if (mem && mem.met > 1 && nowTick(bot) - (mem.lastSeen || 0) > 300 && Math.random() < 0.5) line = voiced(bot, one([
+                "back again, {n}?", "{n}! good to see you again.", "oh, it's you, {n}. how've you been?", "{n}! been a while.",
+                "well, look who it is. hello, {n}.", "{n}! thought you'd gone off somewhere.", "ah, {n}. still about, then?",
+                "hello stranger. how've you been, {n}?", "{n}, hello again. how've you been?", "long time no see, {n}.",
+                "{n}! where've you been hiding?", "you again, {n}? good.", "ah, a familiar face. hello, {n}.", "{n}! still alive, i see."
+            ]).replace('{n}', name));
             else line = gen(bot, rel >= 3 ? 'greetFriend' : 'reactGreetBack', { name });
             if (/how've you been/.test(line || '')) expecting = { kind: 'free', about: 'howareyou' };
             else if (!expecting && human && Math.random() < 0.25 + p.sociability * 0.4) {
                 const n = notice(bot, speaker, mem);
                 if (n) { tail = voiced(bot, n.text); if (/\?$/.test(n.text)) expecting = { kind: 'free', about: 'notice' }; }
-                else if (Math.random() < 0.5) { tail = voiced(bot, one(["what brings you out here?", "what are you up to today?", "off somewhere?"])); expecting = { kind: 'free', about: 'activity' }; }
+                else if (Math.random() < 0.5) { tail = voiced(bot, one([
+                    "what brings you out here?", "what are you up to today?", "off somewhere?", "what's the plan today?",
+                    "what are you after?", "anything on today?", "where are you headed?", "what are you up to?",
+                    "much on today?", "on your way somewhere?", "what's brought you this way?", "busy day?"
+                ])); expecting = { kind: 'free', about: 'activity' }; }
             }
             break;
         }
         case 'howAreYou':
             line = voiced(bot, moodLine(bot));
-            if (Math.random() < 0.9) { tail = voiced(bot, one(["you?", "and yourself?", "how about you?"])); expecting = { kind: 'free', about: 'howareyou' }; }
+            if (Math.random() < 0.9) { tail = voiced(bot, one([
+                "you?", "and yourself?", "how about you?", "yourself?", "and you?", "you alright?", "how's yourself?",
+                "how are you keeping?", "how's things with you?", "you doing alright?", "what about you?", "how're you getting on?",
+                "you well?", "and how's you?", "how's your day going?", "how about yourself?", "you keeping well?",
+                "how's life treating you?", "and you - all good?", "how are you finding it?"
+            ])); expecting = { kind: 'free', about: 'howareyou' }; }
             break;
         case 'story': {
             // a story on request: a real episode first, else the bot's stock anecdotes
@@ -20402,16 +21118,40 @@ function planReply(bot, speaker, u, t, mem, opts) {
         }
         case 'whatsNew': {
             const news = newsLine(bot);
-            if (news) line = voiced(bot, Math.random() < 0.5 ? news : one(["well - ", "let me think. ", "since you ask: ", "oh, "]) + news);
-            else line = voiced(bot, one(["not much, honestly - {act}.", "same old. {act}.", "nothing to report. {act}."]).replace('{act}', hearing.activityLine(bot, true)));
-            if (human && Math.random() < 0.7) { tail = voiced(bot, one(["you?", "what about you?", "anything on your end?"])); expecting = { kind: 'free', about: 'news' }; }
+            if (news) line = voiced(bot, Math.random() < 0.5 ? news : one([
+                "well - ", "let me think. ", "since you ask: ", "oh, ", "funny you should ask - ", "actually, ",
+                "now you mention it, ", "hm, let's see. ", "one thing - ", "you'll never guess - ", "not a lot, except ", "as it goes, "
+            ]) + news);
+            else line = voiced(bot, one([
+                "not much, honestly - {act}.", "same old. {act}.", "nothing to report. {act}.", "quiet day. {act}.",
+                "nothing you'd call news. {act}.", "same as yesterday - {act}.", "all quiet. {act}.", "not a lot - {act}.",
+                "nothing exciting. {act}.", "can't think of anything. {act}.", "no drama, thankfully. {act}.", "little and often. {act}.",
+                "the usual. {act}.", "nowt much. {act}.", "same routine - {act}.", "you know how it is. {act}."
+            ]).replace('{act}', hearing.activityLine(bot, true)));
+            if (human && Math.random() < 0.7) { tail = voiced(bot, one([
+                "you?", "what about you?", "anything on your end?", "any news your side?", "and yourself?", "what've you been up to?",
+                "anything new with you?", "how about you?", "what's your news?", "you been up to much?", "anything happening your way?",
+                "and you - anything to tell?", "what about your day?", "anything worth telling?"
+            ])); expecting = { kind: 'free', about: 'news' }; }
             break;
         }
         case 'wellbeing':
             line = voiced(bot, u.sentiment < 0
-                ? one(["sorry to hear that, {n}.", "rough, that. hang in there, {n}.", "ah, it'll pass, {n}."])
-                : u.sentiment > 0 ? one(["good to hear, {n}!", "ha, glad someone's thriving.", "that's what i like to hear."])
-                    : one(["fair enough.", "same old, then.", "can't ask for more than that."])).replace('{n}', name);
+                ? one([
+                    "sorry to hear that, {n}.", "rough, that. hang in there, {n}.", "ah, it'll pass, {n}.", "that's no good, {n}.",
+                    "sorry, {n}. days like that come and go.", "ah, {n}. chin up.", "bad luck, {n}. it'll turn.", "ugh. sorry to hear it, {n}.",
+                    "we've all been there, {n}.", "that's rough, {n}. hang on in there.", "oh no, {n}. what happened?", "shame, that. take it easy, {n}."
+                ])
+                : u.sentiment > 0 ? one([
+                    "good to hear, {n}!", "ha, glad someone's thriving.", "that's what i like to hear.", "grand, {n}!", "good on you, {n}.",
+                    "nice one, {n}. keep it up.", "glad to hear it, {n}.", "that's the way, {n}.", "someone's having a good day, then.",
+                    "good stuff, {n}.", "ha, lucky you.", "long may it last, {n}."
+                ])
+                    : one([
+                        "fair enough.", "same old, then.", "can't ask for more than that.", "ticking over, then.", "could be worse, eh?",
+                        "fair. same here, mostly.", "that'll do, {n}.", "middling's fine by me.", "nowt wrong with steady.", "aye, know the feeling.",
+                        "not bad is not bad, {n}.", "good enough, then."
+                    ])).replace('{n}', name);
             if (/and you|you\?|yourself|hbu/.test(u.norm)) line = join(line, voiced(bot, moodLine(bot)));
             break;
         case 'whatDoing': {
@@ -20422,17 +21162,65 @@ function planReply(bot, speaker, u, t, mem, opts) {
             if (Math.random() < 0.4) {
                 const told = human ? recallTold(bot, speaker.username, 3000) : null;
                 if (told && nowTick(bot) - told.tick > 30 && Math.random() < 0.7) { tail = voiced(bot, toldQuestion(bot, told, name)); expecting = { kind: 'free', about: 'told' }; }
-                else { tail = voiced(bot, one(["what about you?", "and you?", "you?"])); expecting = { kind: 'free', about: 'activity' }; }
+                else { tail = voiced(bot, one([
+                    "what about you?", "and you?", "you?", "what are you up to?", "yourself?", "how about you?", "and what are you doing?",
+                    "what's your plan?", "what are you on with?", "what've you got on?", "you up to much?", "and yourself?",
+                    "what are you after today?", "what's keeping you busy?"
+                ])); expecting = { kind: 'free', about: 'activity' }; }
             }
             break;
         }
         case 'whoAreYou':
             line = voiced(bot, selfLine(bot));
             break;
+        case 'askTenure': {
+            // tenure answer sized by combat level, then the ball back
+            const cl = bot.getCombatLevel ? bot.getCombatLevel() : (bot.combatLevel || 3);
+            line = voiced(bot, (cl < 15 ? one([
+                "not long, {n}. still finding my feet.", "only just started, really.", "new enough to still get lost.", "few days, {n}. still learning.",
+                "not long at all. everything's new.", "barely started, {n}.", "a week or so, if that.", "still green, {n}. very green.",
+                "just long enough to die a few times.", "not long. still working out which way's north."
+            ])
+                : cl < 40 ? one([
+                    "a fair while now, {n}.", "long enough to know better.", "a good few weeks of it, {n}.", "a couple of months, give or take.",
+                    "long enough to have a bank full of junk.", "a while, {n}. not ancient yet.", "some time. i know my way about.",
+                    "a good stretch, {n}.", "long enough that the cows fear me.", "on and off for a while, {n}."
+                ])
+                    : one([
+                        "since before you were about, i'd wager.", "years, {n}. feels like it, anyway.", "long enough to have stories.",
+                        "too long, {n}. ask anyone.", "since the early days, {n}.", "ages. i've seen this place change.", "longer than i'd admit, {n}.",
+                        "long enough to remember when it was quiet.", "donkey's years, {n}.", "a lifetime, near enough."
+                    ])).replace('{n}', name));
+            if (Math.random() < 0.6) { tail = voiced(bot, one([
+                "you?", "and yourself?", "how long have you been at it?", "how about you?", "you been playing long?", "what about you?",
+                "yourself?", "been here long yourself?", "you new or an old hand?", "how long for you?", "and you - new or not?",
+                "when did you start?", "you been about long?"
+            ])); expecting = { kind: 'free', about: 'tenure' }; }
+            break;
+        }
         case 'askLevel': {
             const cl = bot.getCombatLevel ? bot.getCombatLevel() : (bot.combatLevel || 3);
             const theirs = speaker.getCombatLevel ? speaker.getCombatLevel() : 0;
-            line = voiced(bot, "i'm combat level " + cl + "." + (theirs ? (theirs > cl + 10 ? " you've a fair few on me." : theirs < cl - 10 ? " you'll catch up." : " about your level, then.") : ""));
+            line = voiced(bot, one([
+                "i'm combat level " + cl + ".", "combat " + cl + ".", "level " + cl + ", me.", cl + " combat.", "i'm " + cl + " combat.",
+                "combat level " + cl + ", for my sins.", "only " + cl + ", combat-wise.", "sitting at " + cl + " combat.", cl + " combat, last i looked.",
+                "i'm a " + cl + " in combat."
+            ])
+                + (theirs ? (theirs > cl + 10 ? one([
+                    " you've a fair few on me.", " you're well ahead of me.", " i've some catching up to do.", " you'd have me in a fight.",
+                    " you're the big one here.", " you've the edge on me, clearly.", " a way behind you, then.", " you'd flatten me.",
+                    " you're miles ahead.", " i'm the small one here."
+                ])
+                    : theirs < cl - 10 ? one([
+                        " you'll catch up.", " give it time, you'll get there.", " you'll be past me before long.", " not far behind, really.",
+                        " keep at it and you'll overtake me.", " you'll be there soon enough.", " i had a head start, that's all.", " plenty of time to catch me.",
+                        " you're doing fine for where you are.", " i was your level once. it goes quick."
+                    ])
+                        : one([
+                            " about your level, then.", " near enough the same as you.", " we're a fair match.", " much of a muchness with you.",
+                            " same boat as you, then.", " neck and neck with you.", " we'd be an even fight.", " close to yours, that.",
+                            " we're about level, you and me.", " so we're much the same."
+                        ])) : ""));
             break;
         }
         case 'askGear':
@@ -20449,7 +21237,12 @@ function planReply(bot, speaker, u, t, mem, opts) {
                     line = voiced(bot, dir === 'right here' ? "the " + place.label + "? you're basically on it." : "head " + dir + " for the " + place.label + ".");
                 }
             }
-            if (!line) line = voiced(bot, one(["not sure where that is, sorry.", "couldn't tell you, {n} - ask around Lumbridge.", "no idea, honestly."]).replace('{n}', name));
+            if (!line) line = voiced(bot, one([
+                "not sure where that is, sorry.", "couldn't tell you, {n} - ask around Lumbridge.", "no idea, honestly.",
+                "that's a new one on me, {n}.", "haven't a clue, sorry {n}.", "not somewhere i know, that.", "you've got me there, {n}.",
+                "i'd be guessing, and i'd guess wrong.", "never heard of it, {n}. sorry.", "beats me. try asking in town.",
+                "not my patch, that. couldn't say.", "sorry {n}, i'm no map."
+            ]).replace('{n}', name));
             break;
         }
         case 'askHowTo':
@@ -20459,7 +21252,7 @@ function planReply(bot, speaker, u, t, mem, opts) {
             try { known = factionAnswer(bot, speaker, u.norm || u.text, name) || knowledge.answer(bot, u.norm || u.text); } catch (e) { known = null; }
             if (known) {
                 const m = mood.of(bot);
-                const lead = m.valence > 0.3 && m.energy > 0.15 ? one(['sure - ', 'easy one - ', 'oh, ', '']) : '';
+                const lead = m.valence > 0.3 && m.energy > 0.15 ? one(['sure - ', 'easy one - ', 'oh, ', '', 'right - ', 'ah, ', 'well, ', 'that one i know - ', 'as it happens, ', 'let me see - ', 'ok, so ', 'good question. ']) : '';
                 line = voiced(bot, lead + known.text);
                 try { require('./reputation').note(bot, 'help', 1); } catch (e) {  }
             } else if (u.entities.npcs.length || u.entities.items.length || u.entities.skills.length) {
@@ -20468,13 +21261,20 @@ function planReply(bot, speaker, u, t, mem, opts) {
                 line = voiced(bot, opinionLine(bot, u));
             } else {
                 line = gen(bot, 'reactQuestion', { name });
-                if (human && p.curiosity > 0.4 && Math.random() < 0.5) { tail = voiced(bot, one(["what are you after, exactly?", "what do you mean?", "go on?"])); expecting = { kind: 'free', about: 'clarify' }; }
+                if (human && p.curiosity > 0.4 && Math.random() < 0.5) { tail = voiced(bot, one([
+                    "what are you after, exactly?", "what do you mean?", "go on?", "say again?", "how do you mean?",
+                    "what exactly are you asking?", "not sure i follow - what's the question?", "spell it out for me?",
+                    "what is it you want to know?", "run that by me again?", "in what sense?", "which bit do you mean?"
+                ])); expecting = { kind: 'free', about: 'clarify' }; }
             }
             break;
         }
         case 'askOpinion':
             line = voiced(bot, opinionLine(bot, u));
-            if (human && Math.random() < 0.4) { tail = voiced(bot, one(["you?", "what do you reckon?", "your take?"])); expecting = { kind: 'free', about: 'opinion' }; }
+            if (human && Math.random() < 0.4) { tail = voiced(bot, one([
+                "you?", "what do you reckon?", "your take?", "what's your view?", "what do you think?", "you agree?",
+                "how about you?", "what would you say?", "am i wrong?", "your thoughts?", "you see it different?", "and you?"
+            ])); expecting = { kind: 'free', about: 'opinion' }; }
             break;
         case 'askAbout': {
             const c = u.primary.clause;
@@ -20486,11 +21286,27 @@ function planReply(bot, speaker, u, t, mem, opts) {
                 line = voiced(bot, d || hearing.activityLine(bot, false));
             } else if (/favourite|favorite|prefer/.test(c)) {
                 const best = Object.keys(SKILL_TASTE).filter((k) => k !== 'hits' && k !== 'attack').sort((a, b) => (p[SKILL_TASTE[b][1]] || 0) - (p[SKILL_TASTE[a][1]] || 0))[0];
-                line = voiced(bot, one(["i'd say " + SKILL_TASTE[best][0] + " - " + SKILL_TASTE[best][2] + ".", SKILL_TASTE[best][0] + ", every time."]));
+                line = voiced(bot, one([
+                    "i'd say " + SKILL_TASTE[best][0] + " - " + SKILL_TASTE[best][2] + ".", SKILL_TASTE[best][0] + ", every time.",
+                    SKILL_TASTE[best][0] + ", no contest.", "has to be " + SKILL_TASTE[best][0] + ". " + SKILL_TASTE[best][2] + ".",
+                    SKILL_TASTE[best][0] + " for me. " + SKILL_TASTE[best][2] + ".", "easy - " + SKILL_TASTE[best][0] + ".",
+                    "i'm happiest " + SKILL_TASTE[best][0] + ", honestly.", SKILL_TASTE[best][0] + ". " + SKILL_TASTE[best][2] + ", after all.",
+                    "give me " + SKILL_TASTE[best][0] + " any day.", "probably " + SKILL_TASTE[best][0] + ". always has been."
+                ]));
             } else if (/have you (done|finished|completed|beaten)/.test(c) && u.quest) {
                 let done = false;
                 try { done = questing && questing.isComplete(bot, u.quest.key); } catch (e) { done = false; }
-                line = voiced(bot, done ? one([u.quest.name + "? finished it a while back.", "yes - " + u.quest.name + "'s done and dusted."]) : one(["not yet - " + u.quest.name + " is on my list.", u.quest.name + "? haven't got round to it."]));
+                line = voiced(bot, done ? one([
+                    u.quest.name + "? finished it a while back.", "yes - " + u.quest.name + "'s done and dusted.", u.quest.name + "? aye, done that one.",
+                    "done " + u.quest.name + ", yeah. took a bit.", u.quest.name + " - finished, thankfully.", "yep, " + u.quest.name + " is behind me.",
+                    u.quest.name + "? that's one i've ticked off.", "i have, actually - " + u.quest.name + " was alright.",
+                    "long done, " + u.quest.name + ".", u.quest.name + "? yes. wouldn't rush to do it again."
+                ]) : one([
+                    "not yet - " + u.quest.name + " is on my list.", u.quest.name + "? haven't got round to it.", "no, " + u.quest.name + " is still waiting on me.",
+                    u.quest.name + "? one of these days.", "not " + u.quest.name + ", no. keep meaning to.", "still to do " + u.quest.name + ", sadly.",
+                    u.quest.name + " - started, never finished.", "no. " + u.quest.name + " keeps slipping my mind.",
+                    "haven't done " + u.quest.name + ". should i?", u.quest.name + "? not yet. is it any good?"
+                ]));
             } else if (/(have|did) you (ever|once|seen|killed|fought|fight|beaten|beat|kill|meet|met)/.test(c) && u.entities.npcs.length) {
                 const n = u.entities.npcs[0];
                 let remembered = null;
@@ -20500,9 +21316,23 @@ function planReply(bot, speaker, u, t, mem, opts) {
                         if (e.kind === 'death' && e.killer && e.killer.toLowerCase() === n.name.toLowerCase()) { remembered = "one nearly had me, actually - " + episodes.describe(bot, e); break; }
                     }
                 }
-                line = voiced(bot, remembered || one(["a " + n.name + "? a few times.", "can't say i've crossed a " + n.name + " yet.", n.name + "s - more than i'd like."]));
+                line = voiced(bot, remembered || one([
+                    "a " + n.name + "? a few times.", "can't say i've crossed a " + n.name + " yet.", n.name + "s - more than i'd like.",
+                    "a " + n.name + "? once or twice, aye.", "not a " + n.name + ", no. not yet.", "i've had a run-in with a " + n.name + ", yeah.",
+                    n.name + "s? lost count.", "a " + n.name + "? only from a distance.", "i've met a " + n.name + ". didn't go well for one of us.",
+                    "a " + n.name + " and i have history.", "not many " + n.name + "s, if i'm honest.", "a " + n.name + "? more than i'd care to remember."
+                ]));
             } else if (/been here long|here often|new\b/.test(c)) {
-                line = voiced(bot, mem && mem.met > 2 ? "long enough to know your face, {n}.".replace('{n}', name) : one(["long enough.", "a while now.", "feels like forever some days."]));
+                line = voiced(bot, mem && mem.met > 2 ? one([
+                    "long enough to know your face, {n}.", "long enough that i know you, {n}.", "a while, {n}. we've spoken before, after all.",
+                    "long enough to have met you a few times, {n}.", "you should know, {n} - you've seen me about.", "we've crossed paths enough, {n}.",
+                    "long enough, {n}. you keep turning up, after all.", "i've been here as long as i've known you, {n}.",
+                    "a fair while - you'd know, {n}, you're always about.", "ask yourself, {n}. how long have you known me?"
+                ]).replace('{n}', name) : one([
+                    "long enough.", "a while now.", "feels like forever some days.", "on and off, yeah.", "long enough to know the shortcuts.",
+                    "a fair bit. i like it here.", "not that long. long enough.", "years, some days. weeks, others.", "i'm here more than i'm not.",
+                    "long enough to get bored of the scenery."
+                ]));
             } else {
                 const real = episodes && Math.random() < 0.6 ? episodes.storyTopic(bot) : null;
                 line = gen(bot, 'tellStory', { name, topic: real || require('./conversation').storyTopic(bot) });
@@ -20510,29 +21340,72 @@ function planReply(bot, speaker, u, t, mem, opts) {
             break;
         }
         case 'offer':
-            if (u.entities.items.length) line = voiced(bot, one(["a " + u.entities.items[0].name + "? go on then - trade me.", "you're a gem, {n}. send me a trade.", "wouldn't say no. trade me, {n}."]).replace('{n}', name));
-            else line = voiced(bot, one(["oh, go on then - trade me.", "very kind, {n}. send the trade over.", "for me? ta. trade me and it's a deal."]).replace('{n}', name));
+            if (u.entities.items.length) line = voiced(bot, one([
+                "a " + u.entities.items[0].name + "? go on then - trade me.", "you're a gem, {n}. send me a trade.", "wouldn't say no. trade me, {n}.",
+                "a " + u.entities.items[0].name + "? you're too kind, {n}. trade me.", "i'll take a " + u.entities.items[0].name + " off you gladly - trade me.",
+                "a " + u.entities.items[0].name + ", for me? trade me, {n}.", "ooh, a " + u.entities.items[0].name + ". go on, trade me.",
+                "can't turn down a " + u.entities.items[0].name + ". send the trade, {n}.", "a " + u.entities.items[0].name + "? aye, trade me and it's yours to give.",
+                "that's good of you, {n}. trade me for the " + u.entities.items[0].name + "."
+            ]).replace('{n}', name));
+            else line = voiced(bot, one([
+                "oh, go on then - trade me.", "very kind, {n}. send the trade over.", "for me? ta. trade me and it's a deal.",
+                "well, i'll not say no. trade me, {n}.", "that's kind, {n}. send me a trade.", "go on then, {n}. trade me.",
+                "ha, alright - trade me and we'll see.", "you're a good sort, {n}. trade me.", "if you're offering - trade me.",
+                "cheers {n}. send the trade over."
+            ]).replace('{n}', name));
             break;
         case 'request': {
             const it = u.entities.items[0];
             let has = false;
             try { has = !!(it && bot.inventory && bot.inventory.has(it.id)); } catch (e) { has = false; }
-            if (it && has && (rel >= 1 || p.sociability > 0.55)) line = voiced(bot, one(["i've a " + it.name + " spare - trade me and it's yours.", "sure, {n}. trade me for the " + it.name + ".", "for you, {n}? trade me, i'll hand it over."]).replace('{n}', name));
-            else if (it && !has) line = voiced(bot, one(["haven't got a " + it.name + " on me, sorry.", "no " + it.name + " here, {n}.", "wish i could - no " + it.name + "s on me."]).replace('{n}', name));
-            else if (rel < 0) line = voiced(bot, one(["after everything? no.", "not for you, {n}.", "get lost."]).replace('{n}', name));
-            else line = voiced(bot, one(["depends what it is.", "what do you need, exactly?", "maybe - what's it for?"]));
+            if (it && has && (rel >= 1 || p.sociability > 0.55)) line = voiced(bot, one([
+                "i've a " + it.name + " spare - trade me and it's yours.", "sure, {n}. trade me for the " + it.name + ".", "for you, {n}? trade me, i'll hand it over.",
+                "aye, got a " + it.name + " here. trade me.", "a " + it.name + "? no bother, {n}. trade me.", "you can have the " + it.name + ", {n}. trade me.",
+                "go on then - trade me and the " + it.name + " is yours.", "i've one " + it.name + " going spare. trade me, {n}.",
+                "the " + it.name + "? take it, {n}. trade me.", "sure thing. trade me for the " + it.name + ", {n}."
+            ]).replace('{n}', name));
+            else if (it && !has) line = voiced(bot, one([
+                "haven't got a " + it.name + " on me, sorry.", "no " + it.name + " here, {n}.", "wish i could - no " + it.name + "s on me.",
+                "fresh out of " + it.name + "s, {n}.", "not carrying a " + it.name + ", sorry.", "a " + it.name + "? not on me, {n}.",
+                "no " + it.name + " to give, i'm afraid.", "sorry {n}, i'm out of " + it.name + "s.", "i'd help if i had a " + it.name + ". i don't.",
+                "no " + it.name + "s in my pack, {n}. sorry."
+            ]).replace('{n}', name));
+            else if (rel < 0) line = voiced(bot, one([
+                "after everything? no.", "not for you, {n}.", "get lost.", "you've some nerve, {n}.", "no chance.", "not a hope, {n}.",
+                "ask someone who likes you.", "no. and don't ask again, {n}.", "you're joking, {n}.", "not after last time."
+            ]).replace('{n}', name));
+            else line = voiced(bot, one([
+                "depends what it is.", "what do you need, exactly?", "maybe - what's it for?", "depends. what are you after?",
+                "what do you need, {n}?", "well, what's it for?", "depends what you're asking for.", "go on - what do you need?",
+                "that depends on what it is.", "maybe. what's it for, though?", "depends. i'm not made of coin.", "what do you need it for?"
+            ]).replace('{n}', name));
             if (/what do you need|what's it for|depends/.test(line)) expecting = { kind: 'free', about: 'request' };
             break;
         }
         case 'status':
             if (/hurt|dying|save me|low (hits|health|hp)|need food|poisoned/.test(u.norm)) {
                 line = gen(bot, 'companion', { name }) || voiced(bot, "hang in there, {n} - get some food down you.".replace('{n}', name));
-            } else if (/back now|i'm back/.test(u.norm)) line = voiced(bot, one(["welcome back, {n}.", "there you are.", "thought we'd lost you."]).replace('{n}', name));
-            else line = voiced(bot, one(["no worries, i'll be about.", "take your time, {n}.", "see you in a bit."]).replace('{n}', name));
+            } else if (/back now|i'm back/.test(u.norm)) line = voiced(bot, one([
+                "welcome back, {n}.", "there you are.", "thought we'd lost you.", "wb, {n}.", "ah, you're back.", "back already, {n}?",
+                "good, you're back.", "there you are, {n}. miss anything?", "wb! quiet without you.", "you're back, then. good."
+            ]).replace('{n}', name));
+            else line = voiced(bot, one([
+                "no worries, i'll be about.", "take your time, {n}.", "see you in a bit.", "no rush, {n}.", "righto, i'll be here.",
+                "go on, i'll keep myself busy.", "ok {n}, catch you after.", "fair enough. back soon, i hope.", "sure, i'll be around.",
+                "no bother. don't be long, {n}."
+            ]).replace('{n}', name));
             break;
         case 'celebrate': {
-            if (rel >= 5) line = voiced(bot, one(["that's my mate {n}! knew you had it in you.", "get in, {n}! so proud of you.", "ha! {n}, you legend. well earned."]).replace('{n}', name));
-            else if (p.sociability > 0.3) line = voiced(bot, one(["gz {n}!", "nice one, {n}!", "grats!", "well done, {n}!", "congrats {n}, keep it up."]).replace('{n}', name));
+            if (rel >= 5) line = voiced(bot, one([
+                "that's my mate {n}! knew you had it in you.", "get in, {n}! so proud of you.", "ha! {n}, you legend. well earned.",
+                "yes, {n}! i knew you'd do it.", "brilliant, {n}! that's my mate, that is.", "get in there, {n}! you've earned that.",
+                "{n}, you beauty! well done.", "ha, {n}! never in doubt.", "that's the stuff, {n}! proud of you.", "well done {n}, you deserve it."
+            ]).replace('{n}', name));
+            else if (p.sociability > 0.3) line = voiced(bot, one([
+                "gz {n}!", "nice one, {n}!", "grats!", "well done, {n}!", "congrats {n}, keep it up.", "gratz, {n}.", "nice, {n}!",
+                "good going, {n}!", "well in, {n}.", "gz! what's next?", "congrats, {n}. good effort.", "ha, nice one!",
+                "well done {n}. onwards and upwards.", "gz {n}, well earned."
+            ]).replace('{n}', name));
             break;
         }
         case 'thanks':
@@ -20540,7 +21413,11 @@ function planReply(bot, speaker, u, t, mem, opts) {
             if (t.turns >= 3 && Math.random() < 0.4) close = true;
             break;
         case 'apology':
-            line = voiced(bot, one(["no harm done, {n}.", "don't worry about it.", "it's fine, honestly.", "forget it, {n}."]).replace('{n}', name));
+            line = voiced(bot, one([
+                "no harm done, {n}.", "don't worry about it.", "it's fine, honestly.", "forget it, {n}.", "no bother, {n}.", "we're fine, {n}.",
+                "water under the bridge.", "ah, don't fret about it.", "it's alright, {n}. really.", "already forgotten, {n}.", "no need, {n}. it's nothing.",
+                "we all slip up. no harm.", "think nothing of it, {n}.", "you're alright, {n}."
+            ]).replace('{n}', name));
             break;
         case 'farewell':
             line = gen(bot, 'reactFarewell', { name });
@@ -20549,14 +21426,22 @@ function planReply(bot, speaker, u, t, mem, opts) {
         case 'acknowledge':
         case 'affirm':
             if (Math.random() < 0.5) line = gen(bot, 'reactAffirm', { name });
-            else if (human && p.curiosity > 0.45 && t.turns < 6) { line = voiced(bot, one(["so what are you up to today?", "anything i can help with?", "where are you off to?"])); expecting = { kind: 'free', about: 'activity' }; }
+            else if (human && p.curiosity > 0.45 && t.turns < 6) { line = voiced(bot, one([
+                "so what are you up to today?", "anything i can help with?", "where are you off to?", "what's your plan for today?",
+                "what are you after, then?", "what brings you this way?", "anything on today?", "what are you working on?",
+                "so, what's the goal today?", "you got much on?", "what are you training at the moment?", "where are you headed next?"
+            ])); expecting = { kind: 'free', about: 'activity' }; }
             break;
         case 'deny':
             if (Math.random() < 0.4) line = gen(bot, 'reactDeny', { name });
             break;
         case 'compliment':
             line = gen(bot, 'reactCompliment', { name });
-            if (u.entities.items.length && Math.random() < 0.5) tail = voiced(bot, one(["it's served me well.", "cost me a fortune, mind.", "found it fair and square."]));
+            if (u.entities.items.length && Math.random() < 0.5) tail = voiced(bot, one([
+                "it's served me well.", "cost me a fortune, mind.", "found it fair and square.", "had it ages.", "took some saving for, that.",
+                "it's seen a few fights.", "a mate sorted me out with it.", "not letting it go, mind.", "cheap, actually. don't tell anyone.",
+                "it's the one thing i'd never sell.", "earned every bit of it.", "it does the job."
+            ]));
             break;
         case 'insult':
             line = (p.aggression > 0.55 || mood.of(bot).confidence > 0.6) ? gen(bot, 'reactInsult', { name }) : gen(bot, 'reactHurt', { name });
@@ -20583,47 +21468,116 @@ function planReply(bot, speaker, u, t, mem, opts) {
                 if (k && k.text) {
                     line = voiced(bot, k.text);
                     if (/\b(sell|selling|wts)\b/.test(saidFull) && Math.random() < 0.6) {
-                        tail = voiced(bot, one(["i might take it off you.", "what are you after for it?", "trade me if you like."]));
+                        tail = voiced(bot, one([
+                            "i might take it off you.", "what are you after for it?", "trade me if you like.", "i could be interested, mind.",
+                            "how much do you want for it?", "i'd take it for the right price.", "make me an offer.", "trade me and we'll talk.",
+                            "i'm in the market, as it happens.", "what's your price?", "i might have the coin for that.", "go on, trade me. let's see it."
+                        ]));
                     }
                     break;
                 }
             }
+            // a plan, a find, or talk of a third person get their own reaction
+            if (/\b(off to|heading (to|for|out)|going to go|think i'll|gonna go|i'll go|i'm going|i'm off)\b/.test(saidFull)) {
+                line = gen(bot, 'reactPlan', { name });
+                if (!human && /tag along|see you there/.test(line || '')) expecting = { kind: 'yesno', action: 'tagalong' };
+            } else if (u.entities.items.length && /\b(found|picked up|looted|got myself|dropped me|scored|look what)\b/.test(saidFull)) {
+                const it = u.entities.items[0];
+                line = gen(bot, 'reactFind', { item: (it && it.name) || String(it) });
+            } else if (!u.mentionsMe) {
+                const lowName = String(name).toLowerCase();
+                const other = u.entities.players.find((n) => n && n !== bot.username && String(n).toLowerCase() !== lowName);
+                if (other) line = gen(bot, 'reactGossip', { name: other });
+            }
+            if (line) break;
             if (u.sentiment < 0 && u.mentionsMe) {
                 if (human && !bot.opponent && p.sociability > 0.4 && Math.random() < 0.6) {
                     const skill = goals.current(bot) && goals.current(bot).skill;
-                    line = voiced(bot, one(["rough day? come " + (skill ? skill.replace(/ing$/, '') + 'ing' : 'along') + " with me, beats moping.", "sounds grim, {n}. want some company?", "chin up, {n}. fancy tagging along with me for a bit?"]).replace('{n}', name));
+                    line = voiced(bot, one([
+                        "rough day? come " + (skill ? skill.replace(/ing$/, '') + 'ing' : 'along') + " with me, beats moping.",
+                        "sounds grim, {n}. want some company?", "chin up, {n}. fancy tagging along with me for a bit?",
+                        "that's rubbish, {n}. want to join me for a bit?", "ah, {n}. shall i keep you company a while?",
+                        "sorry, {n}. fancy some " + (skill ? skill.replace(/ing$/, '') + 'ing' : 'company') + " with me to take your mind off it?",
+                        "bad day, {n}? i'm off " + (skill ? skill.replace(/ing$/, '') + 'ing' : 'wandering') + " - want in?",
+                        "cheer up, {n}. want to tag along with me?", "sounds like you could use company, {n}. shall i stick around?",
+                        "ugh, sorry {n}. come along with me, it'll pass quicker."
+                    ]).replace('{n}', name));
                     expecting = { kind: 'yesno', action: 'tagalong' };
-                } else line = voiced(bot, one(["that's rough, {n}.", "sorry to hear it.", "it happens to the best of us."]).replace('{n}', name));
+                } else line = voiced(bot, one([
+                    "that's rough, {n}.", "sorry to hear it.", "it happens to the best of us.", "ah, bad luck, {n}.", "that's a shame, that.",
+                    "sorry, {n}. it'll pass.", "ugh. we've all been there, {n}.", "rotten luck, {n}.", "that's not on, {n}.", "sorry to hear that, {n}. chin up."
+                ]).replace('{n}', name));
             } else if (u.entities.skills.length || u.entities.npcs.length || u.entities.items.length || u.placeHit || u.boss) {
                 line = voiced(bot, opinionLine(bot, u));
                 // a subject was named -> thread it: a tag-along offer to a human, a follow-up to a bot.
                 if (u.entities.skills.length && p.sociability > 0.5 && !bot.opponent && Math.random() < 0.4) {
-                    if (human) { tail = voiced(bot, one(["mind if i join you?", "want a hand with that?"])); expecting = { kind: 'yesno', action: 'tagalong' }; }
-                    else { tail = voiced(bot, one(["how's it going for you?", "what level are you at?", "found any good spots for it?"])); expecting = { kind: 'free', about: 'skill' }; }
+                    if (human) { tail = voiced(bot, one([
+                        "mind if i join you?", "want a hand with that?", "room for one more?", "fancy some company for it?", "could i tag along?",
+                        "shall i join you for a bit?", "want a partner in that?", "mind some company?", "any room for me in that?", "can i come along?"
+                    ])); expecting = { kind: 'yesno', action: 'tagalong' }; }
+                    else { tail = voiced(bot, one([
+                        "how's it going for you?", "what level are you at?", "found any good spots for it?", "getting anywhere with it?",
+                        "how long have you been at it?", "is it paying?", "is it slow going?", "what are you aiming for with it?",
+                        "any tips for it?", "you enjoying it?", "where do you do it?", "what's your level in it now?"
+                    ])); expecting = { kind: 'free', about: 'skill' }; }
                 }
             } else if (u.sentiment > 0) {
-                line = voiced(bot, one(["glad to hear it, {n}.", "good stuff.", "can't argue with that."]).replace('{n}', name));
+                line = voiced(bot, one([
+                    "glad to hear it, {n}.", "good stuff.", "can't argue with that.", "good to hear, {n}.", "nice one.", "that's the way.",
+                    "grand.", "aye, good.", "ha, fair play.", "good on you, {n}.", "that's what i like to hear.", "sounds good, {n}.",
+                    "well, good.", "can't complain about that.", "happy days.", "nice, {n}.", "good going.", "that'll do nicely.",
+                    "ha, good for you, {n}.", "that's cheered me up, that."
+                ]).replace('{n}', name));
                 // a bot moves the exchange on rather than ending on an ack
                 if (!human && Math.random() < 0.4) {
                     const mine = newsLine(bot, 1500) || hearing.activityLine(bot, false);
                     if (mine) { tail = voiced(bot, mine); }
                 }
             } else if (Math.random() < 0.25 && newsLine(bot, 1500)) {
-                line = voiced(bot, one(["guess what - ", "oh, ", "you'll like this: "]) + newsLine(bot, 1500));
-            } else if (p.curiosity > 0.4 && t.turns <= 4 && Math.random() < (human ? 0.6 : 0.4)) {
-                line = voiced(bot, one(["so what are you up to?", "what are you up to these days?", "and what are you up to?", "what are you doing over here?"]));
+                line = voiced(bot, one([
+                    "guess what - ", "oh, ", "you'll like this: ", "here's a thing - ", "funny you should say. ", "that reminds me - ",
+                    "listen to this: ", "get this - ", "speaking of which, ", "as it happens, ", "you'll never guess - ", "so, "
+                ]) + newsLine(bot, 1500));
+            } else if (p.curiosity > 0.4 && t.turns <= 4 && !t.asked.activity && Math.random() < (human ? 0.6 : 0.4)) {
+                // asked once per thread
+                t.asked.activity = nowTick(bot);
+                line = voiced(bot, one([
+                    "so what are you up to?", "what are you up to these days?", "and what are you up to?", "what are you doing over here?",
+                    "what are you on with today?", "what's your plan, then?", "what are you after round here?", "what are you working on?",
+                    "what brings you this way?", "what are you training these days?", "what's the goal today?", "you up to much?",
+                    "what have you got on?", "what are you doing with yourself?"
+                ]));
                 expecting = { kind: 'free', about: 'activity' };
+            } else if (t.topic && t.topic.kind !== 'activity' && Math.random() < 0.6) {
+                // nothing new named: a word on the current subject
+                line = voiced(bot, topicRemark(bot, t.topic) || '');
+                if (!line) line = gen(bot, 'reactAgree', { name });
             } else if (Math.random() < 0.3 + p.sociability * 0.3) {
                 line = gen(bot, Math.random() < 0.5 ? 'reactAgree' : 'reactLaugh', { name });
             }
         }
     }
 
+    // one follow-up question per subject
+    if (line && !tail && !expecting && t.topic && t.topic.name && !t.asked[t.topic.name] && Math.random() < (human ? 0.4 : 0.55)) {
+        const f = topicFollowUp(bot, t.topic);
+        if (f) { t.asked[t.topic.name] = nowTick(bot); tail = voiced(bot, f); expecting = { kind: 'free', about: 'topic' }; }
+    }
+
     // a secondary act ("hi, ..." / "..., thanks") gets a few words in front
     if (secondary && line) {
-        if (secondary.type === 'greet' && type !== 'greet') line = join(voiced(bot, one(["hello, {n}.", "hi, {n}.", "hey, {n}."]).replace('{n}', name)), line);
-        else if (secondary.type === 'thanks' && type !== 'thanks') line = join(line, voiced(bot, "no bother."));
-        else if (secondary.type === 'compliment' && type !== 'compliment') line = join(voiced(bot, "cheers!"), line);
+        if (secondary.type === 'greet' && type !== 'greet') line = join(voiced(bot, one([
+            "hello, {n}.", "hi, {n}.", "hey, {n}.", "alright, {n}.", "hiya, {n}.", "{n}, hello.", "oh, hello {n}.", "hi there, {n}.",
+            "ah, {n}. hello.", "hey there, {n}.", "afternoon, {n}.", "hello there, {n}."
+        ]).replace('{n}', name)), line);
+        else if (secondary.type === 'thanks' && type !== 'thanks') line = join(line, voiced(bot, one([
+            "no bother.", "no problem.", "any time.", "don't mention it.", "you're welcome.", "no worries.", "happy to help.",
+            "that's alright.", "not at all.", "glad to."
+        ])));
+        else if (secondary.type === 'compliment' && type !== 'compliment') line = join(voiced(bot, one([
+            "cheers!", "ta!", "ha, thanks.", "you're too kind.", "aw, cheers.", "thanks, that's nice of you.", "well, thank you.",
+            "ha, stop it.", "kind of you to say.", "cheers, i try."
+        ])), line);
     }
     if (tail && line) line = join(line, tail);
     // a noticed detail rides along only when the reply is short enough to stay one line
@@ -20640,7 +21594,7 @@ module.exports = {
     onSpeech, onPartyChat, onGlobalChat, respond, flush, reading, getThread, closeThread, nearbyBots, planReply, HEAR_RANGE
 };
 
-},{"../clan":163,"../party":196,"./chatgen":76,"./conversation":83,"./dreams":88,"./episodes":90,"./factions":93,"./goals":98,"./hearing":103,"./knowledge":108,"./mentoring":117,"./mood":119,"./nlu":121,"./personality":128,"./questing":138,"./quests-data":139,"./reputation":143,"./social-emergent":151,"./titles":157,"./voice":160}],88:[function(require,module,exports){
+},{"../clan":163,"../party":196,"./chatgen":76,"./context":82,"./conversation":83,"./dreams":88,"./episodes":90,"./factions":93,"./goals":98,"./hearing":103,"./knowledge":108,"./mentoring":117,"./mood":119,"./nlu":121,"./personality":128,"./questing":138,"./quests-data":139,"./reputation":143,"./social-emergent":151,"./titles":157,"./voice":160}],88:[function(require,module,exports){
 // a bot's long-term aspiration: a concrete target (item/level/gold/boss) it works toward, talks about,
 // and replaces with a bigger one when reached. biases goal picks. persisted in cache.bot.dream.
 
@@ -20652,9 +21606,8 @@ const personality = require('./personality');
 function saySelf(bot, text) {
     let out = text;
     try { out = require('./voice').apply(bot, text); } catch (e) {  }
-    // a self-utterance: wrap it so it doesn't trigger nearby hearing-reactions.
-    bot._reactionSpeak = true;
-    try { bot.broadcastChat(out); } catch (e) {  } finally { bot._reactionSpeak = false; }
+    // said aloud so a neighbour may answer it
+    try { bot.broadcastChat(out); } catch (e) {  }
 }
 
 // aspirational gear ladder, built once.
@@ -23415,8 +24368,8 @@ function maybeAnnounce(bot) {
         let line = LINES[Math.floor(Math.random() * LINES.length)];
         try { line = mod('voice').apply(bot, line); } catch (e) {  }
         if (typeof bot.broadcastChat === 'function') {
-            bot._reactionSpeak = true;
-            try { bot.broadcastChat(line); } finally { bot._reactionSpeak = false; }
+            // shown around, so it can be answered
+            bot.broadcastChat(line);
             mod('presence').noteChatter(bot);
         }
     } catch (e) {  }
@@ -23442,7 +24395,8 @@ function speak(bot, situation) {
     let line = null;
     try { line = chatgenMod().generate(situation, {}, bot); } catch (e) {  }
     if (!line) return false;
-    try { bot._reactionSpeak = true; try { bot.broadcastChat(line); } finally { bot._reactionSpeak = false; } } catch (e) {  }
+    // said aloud so a neighbour can pick it up
+    try { bot.broadcastChat(line); } catch (e) {  }
     return true;
 }
 
@@ -24406,7 +25360,8 @@ function onTick(bot) {
                 : ["watch yourself around " + subj + ", " + who + ". no good, that one.", "word of advice, " + who + ": don't trust " + subj + ".", "between us, " + who + " - " + subj + " is trouble."][Math.floor(Math.random() * 3)];
             bot._lastGossip = { to: human.username, subj };
             bot._gossipCd = 400 + Math.floor(Math.random() * 400);
-            try { bot._reactionSpeak = true; bot.broadcastChat(line); } catch (e) {  } finally { bot._reactionSpeak = false; }
+            // said aloud so the listener can weigh in
+            try { bot.broadcastChat(line); } catch (e) {  }
             return true;
         }
     }
@@ -24440,8 +25395,8 @@ function onTick(bot) {
         try { out = mod_voice().apply(bot, out); } catch (e) {  }
     }
     try {
-        bot._reactionSpeak = true;
-        try { bot.broadcastChat(out); } finally { bot._reactionSpeak = false; }
+        // said aloud so the listener can weigh in
+        bot.broadcastChat(out);
     } catch (e) {  }
 
     // listener nudges its own view of the subject, weighted by trust in the gossiper
@@ -24929,6 +25884,10 @@ function parse(text, bot) {
 function nameOf(c) {
     return (c.getFormattedUsername && c.getFormattedUsername()) || c.username || 'friend';
 }
+// one line out of a list of alternatives
+function pick(list) {
+    return list[Math.floor(Math.random() * list.length)];
+}
 function say(bot, situation, ctx) {
     deps();
     let line = null;
@@ -25012,15 +25971,35 @@ function adoptMission(bot, spec) {
     return type;
 }
 
+const MISSION_RICH = ['a money run', 'a bit of coin', 'some gold', 'making some gp', 'a profit run', 'filling the bank',
+    'earning some coin', 'a cash grab', 'a bit of merching', 'getting rich', 'a coin run', 'some honest profit', 'a gp run'];
+const MISSION_LEVEL = ['some training', 'a grind', 'some xp', 'a few levels', 'a training session', 'levelling up',
+    'a bit of grinding', 'getting some levels', 'an xp run', 'some combat training', 'hitting things for xp', 'a level or two', 'a training run'];
+const MISSION_GEAR = ['a gear hunt', 'an upgrade run', 'some new kit', 'a bit of gear hunting', 'better armour', 'a shopping trip',
+    'a weapon upgrade', 'kitting up', 'sorting our gear', 'a proper kit', 'an armour run', 'finding better gear', 'an upgrade hunt'];
+const MISSION_EXPLORE = ['an adventure', 'a wander', 'a bit of exploring', 'seeing the sights', 'a roam', 'a trek', 'a look around',
+    'a proper adventure', 'a stroll somewhere new', 'exploring', 'a jaunt', 'an expedition', 'a ramble'];
 function missionPhrase(spec) {
-    if (spec.boss) return 'hunting ' + spec.boss.name;
-    if (spec.activity === 'getRich') return 'a money run';
-    if (spec.activity === 'levelUp') return 'some training';
-    if (spec.activity === 'gearUp') return 'a gear hunt';
-    if (spec.activity === 'explore') return 'an adventure';
-    if (spec.activity && spec.activity.indexOf('skill:') === 0) return 'some ' + spec.activity.split(':')[1];
-    if (spec.place) return 'a trip to the ' + spec.place.label;
-    return 'an adventure';
+    if (spec.boss) {
+        const n = spec.boss.name;
+        return pick(['hunting ' + n, 'a crack at ' + n, 'going after ' + n, 'a go at ' + n, 'taking on ' + n, 'a scrap with ' + n,
+            'having a word with ' + n, 'fighting ' + n, 'a run at ' + n, 'tracking down ' + n, 'a fight with ' + n, 'sorting out ' + n, 'a hunt for ' + n]);
+    }
+    if (spec.activity === 'getRich') return pick(MISSION_RICH);
+    if (spec.activity === 'levelUp') return pick(MISSION_LEVEL);
+    if (spec.activity === 'gearUp') return pick(MISSION_GEAR);
+    if (spec.activity === 'explore') return pick(MISSION_EXPLORE);
+    if (spec.activity && spec.activity.indexOf('skill:') === 0) {
+        const s = spec.activity.split(':')[1];
+        return pick(['some ' + s, 'a bit of ' + s, s + ' training', 'a ' + s + ' session', 'some ' + s + ' xp', 'a bit of ' + s + ' grinding',
+            'grinding ' + s, s + ' for a while', 'a ' + s + ' run', 'levelling ' + s, 'a spot of ' + s, 'a ' + s + ' grind', 'a bit of ' + s + ' xp']);
+    }
+    if (spec.place) {
+        const l = spec.place.label;
+        return pick(['a trip to the ' + l, 'a walk to the ' + l, 'heading to the ' + l, 'a run to the ' + l, 'the ' + l, 'popping to the ' + l,
+            'a visit to the ' + l, 'the ' + l + ' trip', 'a jaunt to the ' + l, 'a wander over to the ' + l, 'going to the ' + l, 'a stroll to the ' + l, 'nipping to the ' + l]);
+    }
+    return pick(MISSION_EXPLORE);
 }
 
 // ---- the core: one bot hears a line ---------------------------------------
@@ -25040,23 +26019,77 @@ function offerHelpParty(bot, speaker, info, opts) {
     const name = nameOf(speaker);
     // can't drop what it's doing to help this instant.
     if (bot.opponent || bot._quest || bot._bankRun || bot._foodRun) {
-        sayRaw(bot, 'give me a moment, ' + name + " - i'm in the middle of something.");
+        sayRaw(bot, pick([
+            'give me a moment, ' + name + " - i'm in the middle of something.",
+            'hang on, ' + name + ', got my hands full right now.',
+            'two ticks, ' + name + ' - bit busy this second.',
+            'one sec, ' + name + ', let me finish this first.',
+            'not right now, ' + name + ' - mid-something. give me a minute.',
+            'hold that thought, ' + name + ", i'm a bit tied up.",
+            'bear with me, ' + name + ' - nearly done here.',
+            'in a bit, ' + name + ". can't drop this just yet.",
+            'give us a minute, ' + name + ", i'm right in the thick of it.",
+            'sorry ' + name + ", got something on the go. won't be long.",
+            'just finishing up, ' + name + ' - stick around.',
+            'ask me again in a tick, ' + name + ", i'm busy.",
+            "can't this second, " + name + ' - hands are full.',
+            'wait one, ' + name + '. nearly free.'
+        ]));
         return true;
     }
     // already grouped with them -> just reassure (no duplicate invite).
     if (bot.party && bot.party.members && bot.party.members.some((m) => m && m.username === speaker.username)) {
-        sayRaw(bot, "i've got your back, " + name + '. what are we doing?');
+        sayRaw(bot, pick([
+            "i've got your back, " + name + '. what are we doing?',
+            "we're already a team, " + name + ". what's the plan?",
+            'right behind you, ' + name + '. where to?',
+            'say the word, ' + name + " - we're grouped already.",
+            "you've got me already, " + name + '. what needs doing?',
+            "we're in the same party, " + name + '. just point me at it.',
+            'no need to ask twice, ' + name + ", i'm with you. what's up?",
+            'already on your side, ' + name + '. lead on.',
+            "we're a crew already, " + name + ". what's the job?",
+            "you know i'm in, " + name + '. what are we hitting?',
+            'same party, same fight, ' + name + ". what's the target?",
+            'got you, ' + name + ". tell me what we're doing."
+        ]));
         return true;
     }
     // the human is already in another party -> can't invite; offer to tag along instead.
     if (speaker.party) {
-        sayRaw(bot, 'happy to help - lead the way, ' + name + '.');
+        sayRaw(bot, pick([
+            'happy to help - lead the way, ' + name + '.',
+            'course. you lead, ' + name + ", i'll follow.",
+            'go on then, ' + name + ', show me where.',
+            "i'll tag along, " + name + '. after you.',
+            'right, ' + name + " - walk and i'll keep up.",
+            'fair enough, ' + name + ". i'm behind you.",
+            'sure thing, ' + name + ". you know the way, i don't.",
+            'count me in, ' + name + '. lead on.',
+            "i'm with you, " + name + " - just don't lose me.",
+            'no bother, ' + name + '. point the way.',
+            'ok ' + name + ", i'll shadow you. off we go.",
+            "you've got a helper, " + name + '. where are we headed?'
+        ]));
         bot._chatGoto = { x: speaker.x, y: speaker.y, ticks: 200 };
         return true;
     }
     // don't spam invites at one person.
     if (bot._helpInviteCd && bot._helpInviteCd > 0) {
-        sayRaw(bot, "invite's already on its way, " + name + '.');
+        sayRaw(bot, pick([
+            "invite's already on its way, " + name + '.',
+            'already sent you one, ' + name + ' - check your screen.',
+            'sent it, ' + name + '. just accept it.',
+            'you should have an invite already, ' + name + '.',
+            "one's in the post, " + name + '. have a look.',
+            'already invited you, ' + name + ', give it a click.',
+            "it's there waiting, " + name + " - accept and we're off.",
+            'patience, ' + name + ', the invite went out a moment ago.',
+            'check for the invite, ' + name + ', i sent it.',
+            "you've got one from me already, " + name + '.',
+            'sent, ' + name + '. look for the popup.',
+            'already done, ' + name + ' - just say yes to it.'
+        ]));
         return true;
     }
 
@@ -25069,35 +26102,181 @@ function offerHelpParty(bot, speaker, info, opts) {
     // remember a named task + who to expect, so the party rallies the moment the human accepts.
     if (task) bot._pendingHelpMission = { who: speaker.username, boss: info.boss || null, activity: info.activity || null, place: info.place || null, quest: info.quest || null, ticks: 400 };
     sayRaw(bot, task
-        ? ('happy to help with ' + task + ', ' + name + "! sent you a party invite - accept and we'll head off.")
-        : ("course i'll help, " + name + '! sent you a party invite.'));
+        ? pick([
+            'happy to help with ' + task + ', ' + name + "! sent you a party invite - accept and we'll head off.",
+            "course i'll help with " + task + ', ' + name + ". invite sent, accept it and let's go.",
+            task + '? count me in, ' + name + ". party invite's on its way.",
+            'right, ' + task + ' it is, ' + name + ". sent you an invite - accept and we'll move.",
+            "i'm up for " + task + ', ' + name + "! accept the invite and we'll crack on.",
+            'sounds good, ' + name + ' - ' + task + '. check for my invite.',
+            'i can do ' + task + ', ' + name + '. sent an invite, hop in.',
+            "let's sort " + task + ' together, ' + name + ". invite's coming.",
+            task + ' with you, ' + name + '? go on then. accept my invite.',
+            'you had me at ' + task + ', ' + name + '. invite sent.',
+            'aye, ' + task + '. sending you an invite now, ' + name + '.',
+            'no problem, ' + name + ' - ' + task + ". accept the party and we'll head off.",
+            "i'll come for " + task + ', ' + name + '. look for the invite.'
+        ])
+        : pick([
+            "course i'll help, " + name + '! sent you a party invite.',
+            'sure thing, ' + name + ". invite's on its way.",
+            'happy to, ' + name + ' - sent you a party invite.',
+            'no bother, ' + name + '. check for my invite.',
+            "i'm in, " + name + ". accept the party and we'll sort it.",
+            'on it, ' + name + '. party invite sent.',
+            "you've got me, " + name + ' - look for the invite.',
+            'why not, ' + name + '. sent you an invite, hop in.',
+            'aye, ' + name + ", i'll lend a hand. invite's coming.",
+            'always, ' + name + '. invite sent, click yes.',
+            'lead on then, ' + name + ". party invite's in your box.",
+            "wouldn't say no, " + name + '. sending an invite now.'
+        ]));
     return true;
 }
 
 // answer a question with real knowledge where possible.
 
+const GEAR_MAGIC = [
+    'i fight with magic, staff and runes.',
+    "runes and a staff, that's my kit.",
+    'magic all the way - staff in hand, runes in the bag.',
+    "i'm a caster. staff, runes, and a lot of shouting.",
+    'spells, mostly. the staff is just for show.',
+    'i chuck spells at things. works well enough.',
+    'mage here - runes are my ammo.',
+    'staff and a pocketful of runes. nothing fancy.',
+    'i lean on magic. never liked getting close.',
+    "just a staff and whatever runes i haven't burnt yet.",
+    'magic. i let the runes do the hard work.',
+    "a wizard's kit - staff, runes, and hope.",
+    "casting spells, mostly. keeps me out of arm's reach."
+];
+const GEAR_RANGED = [
+    'bow and arrows for me.',
+    'i shoot things. bow, arrows, keep my distance.',
+    "ranger - if it's in sight it's in range.",
+    "a bow and a quiver, that's all i need.",
+    "arrows. lots of them, if i've remembered to buy some.",
+    'i keep a bow strung and my distance kept.',
+    "bow work, mostly. i'd rather not get hit.",
+    'long bow, short temper.',
+    'i do my fighting from a distance, thanks.',
+    'a good bow and a bad aim, working on the second.',
+    "ranged. it's cheaper than runes and safer than swords.",
+    'bow and arrows - nothing gets near me if i can help it.',
+    'i pick them off with arrows before they get close.'
+];
+const GEAR_NONE = [
+    "just my trusty fists and whatever i've got.",
+    'fists, mostly. and a lot of running.',
+    'nothing much - bare hands and bad ideas.',
+    "whatever's in my pack. not a lot.",
+    'no weapon to speak of. i improvise.',
+    'punching things until they stop, honestly.',
+    "just fists. it's a phase.",
+    'empty hands, full heart.',
+    "i'm between weapons at the moment.",
+    'bare knuckles and a prayer.',
+    'nothing in hand right now - saving up.',
+    "fists. don't laugh, it works on chickens.",
+    'not a lot, really. i make do.'
+];
 function gearLine(bot) {
     let line = null;
     try {
         const cb = bot.cache && bot.cache.bot;
         const focus = (cb && cb.focus) || 'auto';
-        if (focus === 'magic') line = "i fight with magic, staff and runes.";
-        else if (focus === 'ranged') line = "bow and arrows for me.";
+        if (focus === 'magic') line = pick(GEAR_MAGIC);
+        else if (focus === 'ranged') line = pick(GEAR_RANGED);
         else {
             const slots = bot.inventory && bot.inventory.equipmentSlots;
             const wi = slots && slots['right-hand'];
             if (typeof wi === 'number' && wi >= 0 && bot.inventory.items[wi]) {
                 const items = require('@2003scape/rsc-data/config/items');
                 const def = items[bot.inventory.items[wi].id];
-                line = def ? "i'm wielding " + def.name.toLowerCase() + "." : null;
+                if (def) {
+                    const w = def.name.toLowerCase();
+                    line = pick([
+                        "i'm wielding " + w + '.',
+                        'got my ' + w + ' in hand right now.',
+                        'this ' + w + ", and it's seen better days.",
+                        'swinging my ' + w + ' at the moment.',
+                        w + ' for me. does the job.',
+                        'just my ' + w + '. nothing to write home about.',
+                        'carrying my ' + w + ' - could be worse.',
+                        'my ' + w + ". we've been through a lot.",
+                        'my trusty ' + w + ", that's my weapon.",
+                        'this ' + w + ' and a bit of nerve.',
+                        "i'm on the " + w + ' these days.',
+                        'the ' + w + ' - not the best, not the worst.',
+                        'wielding my ' + w + ', saving up for better.'
+                    ]);
+                } else line = null;
             }
         }
     } catch (e) {}
-    if (!line) line = "just my trusty fists and whatever i've got.";
+    if (!line) line = pick(GEAR_NONE);
     return line;
 }
 
-// what the bot is doing, as a sentence or a short phrase
+// what the bot is doing, as a sentence or a short phrase.
+// short forms are gerund phrases, spliced into "not much, honestly - {act}."
+const ACT_RICH_SHORT = ['making some coin', 'chasing coin', 'building up my bank', 'grafting for gold', 'on a money run', 'trying to get rich',
+    'scraping coin together', 'filling my pockets', 'on the make', 'stacking coins', 'hunting profit', 'saving up', 'doing a bit of merching', 'working towards a bigger bank'];
+const ACT_RICH_LONG = ['just trying to make some money.', 'chasing coin, same as everyone.', 'building the bank, slowly.', 'on a money run - need the gp.',
+    "trying to get rich. it's not going well.", 'earning a bit of coin where i can.', "the bank's looking thin so i'm grafting for gold.",
+    'making money. the boring kind of adventure.', 'scraping together some coin.', 'saving up for something nice.', "gp, gp, gp. that's the plan today.",
+    'trying to turn a profit somewhere.', 'counting coins and wanting more of them.'];
+const ACT_LEVEL_SHORT = ['grinding some levels', 'training up', 'chasing levels', 'grinding xp', 'getting some levels in', 'working on my stats', 'on the xp grind',
+    'levelling', 'training combat', 'hitting things for xp', 'putting in the levels', 'grinding away', 'chasing the next level', 'getting stronger'];
+const ACT_LEVEL_LONG = ['grinding some levels, you know how it is.', "training. the levels won't get themselves.", 'chasing xp, same as always.',
+    'putting some levels on. slow going.', "on the grind - next level's close.", 'just training up a bit.', 'working on my stats today.',
+    'hitting things until the numbers go up.', 'getting stronger, one level at a time.', "grinding. it's not glamorous.", 'training combat. bit of a slog.',
+    "levels, levels, levels. that's the day.", 'trying to get a level before i log.'];
+const ACT_GEAR_SHORT = ['hunting better gear', 'after some new gear', 'sorting my kit out', 'upgrading my gear', 'looking for an upgrade', 'shopping for armour',
+    'kitting myself out', 'chasing better armour', 'on a gear hunt', 'after a better weapon', 'sorting out my armour', 'hunting for upgrades', 'trying to look less scruffy'];
+const ACT_GEAR_LONG = ['hunting for better gear.', 'trying to upgrade my kit.', 'after some proper armour.', 'shopping around for a better weapon.',
+    "sorting my gear out - it's a bit rubbish.", 'on the hunt for an upgrade.', 'kitting myself out properly.', "my armour's seen better days, so i'm after new.",
+    "looking for gear that isn't falling apart.", 'trying to look the part - new kit.', "gear hunting. the good stuff isn't cheap.",
+    'after a weapon that actually hits things.', 'upgrading, bit by bit.'];
+const ACT_EXPLORE_SHORT = ['just wandering', 'having a wander', 'seeing the sights', 'exploring a bit', 'roaming about', 'out for a stroll', 'poking about',
+    'off exploring', 'wandering the map', 'having a nose around', 'on a bit of an adventure', 'going wherever my feet take me', 'sightseeing', 'out and about'];
+const ACT_EXPLORE_LONG = ['just exploring, seeing the sights.', 'having a wander, no real plan.', "roaming about, seeing what's out there.",
+    'out for a stroll. nice day for it.', "exploring - i'll end up somewhere.", "poking around places i haven't been.", "wandering the map. it's big.",
+    'having a nose around, nothing serious.', 'on a bit of an adventure, i suppose.', 'going wherever the road goes.', 'sightseeing, mostly. the views are free.',
+    'just out and about, taking it in.', 'exploring. got lost twice already.'];
+const ACT_FIGHT_SHORT = ['in the middle of a scrap', 'fighting something', 'mid-fight', 'having a scrap', 'trading blows', 'busy fighting', 'in a bit of a fight',
+    'getting stuck in', 'having a punch-up', 'in combat right now', 'swinging at something', 'in a fight, hang on'];
+const ACT_FIGHT_LONG = ['fighting, as it happens.', 'in the middle of a scrap.', "having a fight - can't chat long.", 'trading blows with something ugly.',
+    "bit busy, something's trying to kill me.", 'mid-fight. give me a sec.', 'getting stuck in, as you can see.', "fighting. it's going ok, i think.",
+    'in a scrap, one moment.', 'swinging at something that swings back.', 'having a bit of a punch-up.', 'combat. the fun kind, hopefully.'];
+const ACT_GATHER_SHORT = ['grafting away', 'gathering bits', 'collecting stuff', 'doing some gathering', 'working the land', 'grafting', 'hard at work',
+    'getting stuck into some gathering', 'filling my pack', 'putting in a shift', 'busy grafting', 'working away'];
+const ACT_GATHER_LONG = ['grafting away, bit by bit.', "gathering. the pack's filling up.", 'doing a bit of gathering, nothing exciting.', 'hard at work, as ever.',
+    'putting in a shift out here.', 'working away. slow but steady.', 'collecting bits and bobs.', "filling my pack with whatever's about.",
+    "gathering. it's honest work.", "grafting. someone's got to.", 'busy with the gathering, then off to the bank.', 'getting a shift in before i bank.'];
+const ACT_IDLE_SHORT = ['keeping busy', 'this and that', 'not a lot', 'the usual', 'bits and pieces', 'odds and ends', 'pottering about', 'nothing special',
+    'same as ever', 'mucking about', 'killing time', 'bit of everything'];
+const ACT_IDLE_LONG = ['oh, just keeping busy.', 'this and that, you know.', 'not a lot, honestly.', 'the usual. nothing exciting.',
+    'bits and pieces, nothing to shout about.', 'pottering about, really.', 'same as ever, keeping myself occupied.', 'mucking about, mostly.',
+    'killing time till something turns up.', 'a bit of everything, nothing in particular.', 'nothing special. just being about.', 'odds and ends. the day fills itself.'];
+function bossActivity(b, short) {
+    if (short) return pick(['off hunting ' + b, 'going after ' + b, 'on the trail of ' + b, 'off to pick a fight with ' + b, 'heading out for ' + b,
+        'hunting ' + b + ' again', 'tracking down ' + b, 'gearing up for ' + b, 'off to bother ' + b, 'chasing ' + b, 'looking for ' + b + ' to fight',
+        'on my way to ' + b, 'after ' + b + ' today']);
+    return pick(["i'm off to hunt " + b + '.', 'going after ' + b + ', wish me luck.', 'on my way to fight ' + b + '.', b + ' is on my list today.',
+        'trying to take down ' + b + '.', 'heading out to find ' + b + '.', "i've got a date with " + b + '.', 'hunting ' + b + '. could go either way.',
+        'off to have a word with ' + b + '.', 'chasing ' + b + ' for the drops.', 'off to test my luck against ' + b + '.', 'tracking ' + b + ". hopefully it's home.",
+        'picking a fight with ' + b + ', as you do.']);
+}
+function skillActivity(s, short) {
+    if (short) return pick(['training ' + s, 'grinding ' + s, 'doing some ' + s, 'working on ' + s, 'levelling ' + s, 'getting ' + s + ' up', 'putting time into ' + s,
+        'chipping away at ' + s, 'having a go at ' + s, 'a bit of ' + s, 'on the ' + s + ' grind', 'busy with ' + s, 'training up ' + s]);
+    return pick(['training my ' + s + '.', 'grinding ' + s + ', slowly but surely.', 'doing some ' + s + ' to pass the time.', 'working on my ' + s + ' today.',
+        'levelling ' + s + ". it's a grind.", 'chipping away at ' + s + '.', 'putting in some ' + s + ' hours.', 'a bit of ' + s + ' - keeps me out of trouble.',
+        'getting my ' + s + ' up a few levels.', s + ' training. thrilling stuff.', 'on the ' + s + ' grind, as usual.', 'busy with ' + s + '. could be worse.',
+        'having a go at ' + s + ' for a while.']);
+}
 function activityLine(bot, short) {
     deps();
     let line = null;
@@ -25108,18 +26287,18 @@ function activityLine(bot, short) {
         if (!line) {
             const g = goals.current(bot);
             if (g) {
-                if (g.type === 'boss') line = short ? "off hunting " + (g.bossName || 'a boss') : "i'm off to hunt " + (g.bossName || 'a boss') + ".";
-                else if (g.type === 'getRich') line = short ? "making some coin" : "just trying to make some money.";
-                else if (g.type === 'levelUp') line = short ? "grinding some levels" : "grinding some levels, you know how it is.";
-                else if (g.type === 'gearUp') line = short ? "hunting better gear" : "hunting for better gear.";
-                else if (g.type === 'explore') line = short ? "just wandering" : "just exploring, seeing the sights.";
-                else if (g.type === 'skill') line = short ? "training " + (g.skill || 'my skills') : "training my " + (g.skill || 'skills') + ".";
+                if (g.type === 'boss') line = bossActivity(g.bossName || 'a boss', short);
+                else if (g.type === 'getRich') line = short ? pick(ACT_RICH_SHORT) : pick(ACT_RICH_LONG);
+                else if (g.type === 'levelUp') line = short ? pick(ACT_LEVEL_SHORT) : pick(ACT_LEVEL_LONG);
+                else if (g.type === 'gearUp') line = short ? pick(ACT_GEAR_SHORT) : pick(ACT_GEAR_LONG);
+                else if (g.type === 'explore') line = short ? pick(ACT_EXPLORE_SHORT) : pick(ACT_EXPLORE_LONG);
+                else if (g.type === 'skill') line = short ? skillActivity(g.skill || 'my skills', true) : skillActivity(g.skill || 'skills', false);
             }
         }
-        if (!line && bot.opponent) line = short ? "in the middle of a scrap" : "fighting, as it happens.";
-        if (!line && bot.gatheringSkill) line = short ? "grafting away" : "grafting away, bit by bit.";
+        if (!line && bot.opponent) line = short ? pick(ACT_FIGHT_SHORT) : pick(ACT_FIGHT_LONG);
+        if (!line && bot.gatheringSkill) line = short ? pick(ACT_GATHER_SHORT) : pick(ACT_GATHER_LONG);
     } catch (e) {}
-    if (!line) line = short ? "keeping busy" : "oh, just keeping busy.";
+    if (!line) line = short ? pick(ACT_IDLE_SHORT) : pick(ACT_IDLE_LONG);
     return line;
 }
 
@@ -25160,7 +26339,8 @@ function tickCommands(bot) {
         const g = bot._chatGoto;
         g.ticks -= 1;
         const d = Math.abs(bot.x - g.x) + Math.abs(bot.y - g.y);
-        if (d <= 3 || g.ticks <= 0) { bot._chatGoto = null; return false; }
+        // done or out of time: the journey is dropped too
+        if (d <= 3 || g.ticks <= 0) { bot._chatGoto = null; bot._travel = null; return false; }
         if (!travel.isTraveling(bot)) travel.begin(bot, { x: g.x, y: g.y });
         travel.step(bot);
         return true;
@@ -25179,6 +26359,13 @@ function tickCommands(bot) {
             return false;
         }
         f.lost = 0;
+        // a follow ring, or a bot that has stopped moving: the follow ends
+        if (target.isBot) {
+            if (target._follow && target._follow.username === bot.username) { bot._follow = null; return false; }
+            if (target.x === f.lastX && target.y === f.lastY) { f.idle = (f.idle || 0) + 1; } else { f.idle = 0; }
+            f.lastX = target.x; f.lastY = target.y;
+            if (f.idle > 30) { bot._follow = null; return false; }
+        }
         const d = bot.getDistance ? bot.getDistance(target) : Math.abs(bot.x - target.x) + Math.abs(bot.y - target.y);
         if (d > 3) {
             const steps = require('./pathfind').findPathAdjacent(bot.world, bot.x, bot.y, target.x, target.y);
@@ -25221,6 +26408,26 @@ function helpers() {
     };
 }
 
+const GIFT_NO_ROOM = [
+    'no room right now, cheers though!',
+    "pack's full, sorry - thanks anyway!",
+    "i've no space, but that's kind of you!",
+    "can't carry it, my bag's stuffed. cheers!",
+    'full up, sadly. ask me after i bank!',
+    'no room in the pack, but ta!',
+    "wish i could - inventory's rammed!",
+    'nowhere to put it, cheers all the same!',
+    "bag's bursting. hold it for me?",
+    'full inventory here, thanks though!',
+    'no space, sorry! next time.',
+    "can't take it, i'm full to the brim. ta!"
+];
+const GIFT_ACCEPTS = [
+    'yes please!', 'oh go on then - cheers!', 'ta very much!', "aye, i'll take it!",
+    "don't mind if i do!", "cheers, that's kind!", "you're a star, ta!", "go on, i'll have it!",
+    'lovely, thanks!', 'oh nice one, cheers!', "wouldn't say no!", "yes! you're too good.",
+    "ta, that's handy!", "cheers, i'll put it to use!"
+];
 // true when this file spoke/acted for the line and dialogue should stop
 function preHeard(bot, speaker, message, opts) {
     deps();
@@ -25234,9 +26441,8 @@ function preHeard(bot, speaker, message, opts) {
     if (speaker._giftOffer && speaker._giftOffer.to === bot.username && parse(message, bot).intent === 'giftoffer') {
         if (!bot.opponent && !bot.locked) { bot._holdTicks = Math.max(bot._holdTicks || 0, 12); }
         const full = bot.inventory && bot.inventory.isFull && bot.inventory.isFull();
-        if (full) { sayRaw(bot, 'no room right now, cheers though!'); try { require('./mentoring').cancelOfferedGift(speaker, false); } catch (e) {} return true; }
-        const ACCEPTS = ['yes please!', 'oh go on then - cheers!', 'ta very much!', "aye, i'll take it!"];
-        sayRaw(bot, ACCEPTS[Math.floor(Math.random() * ACCEPTS.length)]);
+        if (full) { sayRaw(bot, pick(GIFT_NO_ROOM)); try { require('./mentoring').cancelOfferedGift(speaker, false); } catch (e) {} return true; }
+        sayRaw(bot, pick(GIFT_ACCEPTS));
         try { require('./mentoring').giveOfferedGift(speaker, bot); } catch (e) {}
         return true;
     }
@@ -25251,8 +26457,23 @@ function preHeard(bot, speaker, message, opts) {
         let cb = null;
         try { cb = require('./chatgen').generate('taunt', { name: who }, bot); } catch (e) {}
         if (cb) { sayRaw(bot, cb); } else {
-            const fb = ['big words, ' + who + '.', 'you\'ll regret that, ' + who + '.', 'say it to my face, ' + who + '.', 'i\'m not scared of you, ' + who + '.', 'keep talking, ' + who + '.'];
-            sayRaw(bot, fb[Math.floor(Math.random() * fb.length)]);
+            sayRaw(bot, pick([
+                'big words, ' + who + '.',
+                "you'll regret that, " + who + '.',
+                'say it to my face, ' + who + '.',
+                "i'm not scared of you, " + who + '.',
+                'keep talking, ' + who + '.',
+                'still running your mouth, ' + who + '?',
+                "didn't ask, " + who + '.',
+                'nobody cares, ' + who + '.',
+                'careful, ' + who + ". i've got a long memory.",
+                'bold, coming from you, ' + who + '.',
+                'oh look, ' + who + ' has opinions.',
+                'you and whose army, ' + who + '?',
+                'give it a rest, ' + who + '.',
+                'one day, ' + who + '. one day.',
+                'heard it all before, ' + who + '.'
+            ]));
         }
         try { social.noteInteraction(bot, speaker.username, -0.3); } catch (e) {}
         return true;
@@ -25287,7 +26508,13 @@ function handleAct(bot, speaker, act, u, opts) {
     const info = { boss: u.boss, activity: u.activity, place, quest: u.quest, intent: act.type, addressed: !!(u.addressee && u.addressee.name === bot.username) };
     switch (act.type) {
         case 'follow':
-            if (obeys(bot, speaker, opts)) { bot._follow = { username: speaker.username, ticks: 300 + Math.floor(Math.random() * 300) }; bot._holdTicks = 0; return { handled: true, line: gen('ackFollow', { name }), delta: 0.2 }; }
+            if (obeys(bot, speaker, opts)) {
+                // a human is followed for a good while; another bot only briefly, and never in a ring
+                const ring = !!(speaker.isBot && speaker._follow && speaker._follow.username === bot.username);
+                if (!ring) bot._follow = { username: speaker.username, ticks: speaker.isBot ? 60 + Math.floor(Math.random() * 60) : 300 + Math.floor(Math.random() * 300) };
+                bot._holdTicks = 0;
+                return { handled: true, line: gen('ackFollow', { name }), delta: 0.2 };
+            }
             return { handled: true, line: gen('refuseCommand', { name }) };
         case 'come':
             if (obeys(bot, speaker, opts)) { bot._chatGoto = { x: speaker.x, y: speaker.y, ticks: 120 }; return { handled: true, line: gen('ackCome', { name }), delta: 0.1 }; }
@@ -25296,7 +26523,15 @@ function handleAct(bot, speaker, act, u, opts) {
             if (obeys(bot, speaker, opts)) { bot._holdTicks = 30 + Math.floor(Math.random() * 60); bot._follow = null; return { handled: true, line: gen('ackWait', { name }) }; }
             return { handled: false };
         case 'goto':
-            if (place && obeys(bot, speaker, opts)) { bot._chatGoto = { x: place.x, y: place.y, ticks: 300 }; return { handled: true, line: vo('to the ' + place.label + ' then!'), delta: 0.2 }; }
+            if (place && obeys(bot, speaker, opts)) {
+                const l = place.label;
+                bot._chatGoto = { x: place.x, y: place.y, ticks: 300 };
+                return { handled: true, line: vo(pick([
+                    'to the ' + l + ' then!', 'right, the ' + l + ' it is.', 'off to the ' + l + ', lead on!', 'the ' + l + '? on my way.',
+                    'heading for the ' + l + ' now.', 'fine, ' + l + ". let's go.", 'the ' + l + ', got it.', 'off we go to the ' + l + '.',
+                    'the ' + l + ' then. keep up!', 'alright, making for the ' + l + '.', 'the ' + l + ' - i know the way.', 'to the ' + l + ', after you.'
+                ])), delta: 0.2 };
+            }
             return { handled: false };
         case 'propose': {
             const spec = { boss: u.boss, activity: u.activity, place };
@@ -25308,11 +26543,29 @@ function handleAct(bot, speaker, act, u, opts) {
                 const q = u.quest;
                 let questing = null, done = false, ready = true;
                 try { questing = require('./questing'); done = questing.isComplete(bot, q.key); ready = questing.prereqsMet(bot, q); } catch (e) {}
-                if (done) return { handled: true, line: vo("i've already finished " + q.name + ", but i'll tag along.") };
-                if (!ready) return { handled: true, line: vo("i'd love to, but i'm not ready for " + q.name + " yet.") };
+                const qn = q.name;
+                if (done) return { handled: true, line: vo(pick([
+                    "i've already finished " + qn + ", but i'll tag along.", 'done ' + qn + ' already - happy to come though.',
+                    qn + "? finished that ages ago. i'll still come.", 'already got ' + qn + " done, but i'll keep you company.",
+                    "i've done " + qn + ", so i'll just be moral support.", qn + " is done on my end - i'll walk with you anyway.",
+                    'finished ' + qn + " a while back. i'll tag along for fun.", 'already through ' + qn + ", but sure, i'll come.",
+                    "can't do " + qn + ' twice, but i can follow you round.', "i've been there and done " + qn + ". i'll tag along.",
+                    qn + "? completed. i'll come watch you suffer.", 'done that one - ' + qn + ' - but count me in for the walk.'
+                ])) };
+                if (!ready) return { handled: true, line: vo(pick([
+                    "i'd love to, but i'm not ready for " + qn + ' yet.', 'not up to ' + qn + ' yet, sorry.',
+                    qn + "? i've not got the levels for that yet.", "can't do " + qn + ' yet - missing a bit first.',
+                    "i'm not there for " + qn + ' yet. soon maybe.', 'wish i could, ' + qn + " isn't unlocked for me yet.",
+                    qn + ' is beyond me at the moment.', "give me a while, i'm not ready for " + qn + '.',
+                    'not yet - ' + qn + " needs more than i've got.", "i'd only hold you back on " + qn + '. not ready.',
+                    qn + '? not quite there. ask me later.', 'still working towards ' + qn + ". can't just yet."
+                ])) };
                 if (bot.party) { try { partyCoord.setMission(bot.party, { quest: { key: q.key, name: q.name, hub: q.hub } }); } catch (e) {} }
                 else { try { require('./questing').startQuest(bot, require('./quests-data').find((x) => x.key === q.key)); } catch (e) {} }
-                return { handled: true, line: gen('missionAccept', { name, mission: 'doing ' + q.name }), delta: 0.3 };
+                return { handled: true, line: gen('missionAccept', { name, mission: pick([
+                    'doing ' + qn, 'a go at ' + qn, qn, 'sorting ' + qn, 'a crack at ' + qn, 'having a go at ' + qn,
+                    'finishing ' + qn, 'knocking out ' + qn, 'getting ' + qn + ' done', 'a run at ' + qn, 'tackling ' + qn, 'starting ' + qn
+                ]) }), delta: 0.3 };
             }
             if (willing && (spec.boss || spec.activity || spec.place)) {
                 adoptMission(bot, spec);
@@ -25447,6 +26700,16 @@ function onTick(bot) {
             bot._hubCd = 900 + Math.floor(Math.random() * 1800); // don't loiter again for a long while
             return false;
         }
+        // a loiterer shifts a couple of tiles every 40 ticks
+        if (v.left % 40 === 0 && !bot.walkQueue.length && !bot.locked) {
+            try {
+                const tx = v.x + Math.floor(Math.random() * 5) - 2, ty = v.y + Math.floor(Math.random() * 5) - 2;
+                if (tx !== bot.x || ty !== bot.y) {
+                    const steps = require('./pathfind').findPathTo(bot.world, bot.x, bot.y, tx, ty, 60);
+                    if (steps && steps.length) bot.walkQueue = steps;
+                }
+            } catch (e) {}
+        }
         // a stall-holder hawks its wares (marketCry self-limits); everyone else makes
         // idle small talk
         if (v.selling && hasWares(bot)) { try { require('./trades').marketCry(bot); } catch (e) {} }
@@ -25473,7 +26736,7 @@ function onTick(bot) {
     if (!h) { return false; }
     // already here? loiter in place, else trek over
     const here = Math.abs(bot.x - h.x) + Math.abs(bot.y - h.y) <= 4;
-    bot._hubVisit = { name: h.name, x: h.x, y: h.y, phase: here ? 'loiter' : 'travel', ticks: 0, left: 250 + Math.floor(Math.random() * 400), selling: selling };
+    bot._hubVisit = { name: h.name, x: h.x, y: h.y, phase: here ? 'loiter' : 'travel', ticks: 0, left: 120 + Math.floor(Math.random() * 200), selling: selling };
     if (!here) { travel.begin(bot, { x: h.x, y: h.y }); }
     return true;
 }
@@ -25483,7 +26746,8 @@ function isHubbing(bot) { return !!bot._hubVisit; }
 
 module.exports = { onTick, wantsToHangOut, isHubbing, hubs };
 
-},{"./evolve":92,"./guilds":102,"./mood":119,"./pacing":123,"./personality":128,"./trades":158,"./travel":159}],105:[function(require,module,exports){
+},{"./evolve":92,"./guilds":102,"./mood":119,"./pacing":123,"./pathfind":127,"./personality":128,"./trades":158,"./travel":159}],105:[function(require,module,exports){
+(function (process){(function (){
 // autonomous player-bots manager. a bot is a real Player with socket=null, added to world.players.
 // spawns/despawns bots, drives each brain per tick, persists and restores the roster across restarts.
 
@@ -25527,6 +26791,8 @@ function pollerFailed(e) {
     if (_reported.has(key) || _reported.size > 64) return;
     _reported.add(key);
     try { console.error('[bots] poller threw: ' + key); } catch (err) {  }
+    // RSC_TRACE=1 (desktop harnesses): the whole stack
+    try { if (typeof process !== 'undefined' && process.env && process.env.RSC_TRACE && e && e.stack) console.error(e.stack); } catch (err) {}
 }
 
 
@@ -26975,7 +28241,8 @@ module.exports = {
     activeBots
 };
 
-},{"../../../model/bot-player":8,"../../../skills":735,"../party":196,"./brains/career":70,"./brains/combat":71,"./brains/spike-woodcutter":73,"./dialogue":87,"./goals":98,"./governor":100,"./lifecycle":111,"./memory":116,"./mood":119,"./pacing":123,"./personality":128,"./poller-registry":129,"./pvp":136,"./social":152,"./trades":158,"./waypoints.json":161}],106:[function(require,module,exports){
+}).call(this)}).call(this,require('_process'))
+},{"../../../model/bot-player":8,"../../../skills":735,"../party":196,"./brains/career":70,"./brains/combat":71,"./brains/spike-woodcutter":73,"./dialogue":87,"./goals":98,"./governor":100,"./lifecycle":111,"./memory":116,"./mood":119,"./pacing":123,"./personality":128,"./poller-registry":129,"./pvp":136,"./social":152,"./trades":158,"./waypoints.json":161,"_process":1029}],106:[function(require,module,exports){
 // a bot occasionally announces its next task, derived from its current goal (goals.js)
 
 const personality = require('./personality');
@@ -27028,8 +28295,8 @@ function onTick(bot) {
     try { line = chatgenMod().generate('announceIntent', { topic }, bot); } catch (e) {  }
     if (!line) { bot._intentCd = 400; return false; }
     try {
-        bot._reactionSpeak = true;
-        try { bot.broadcastChat(line); } finally { bot._reactionSpeak = false; }
+        // a stated plan is an opener
+        bot.broadcastChat(line);
         presenceMod().noteChatter(bot);
     } catch (e) {  }
     bot._intentCd = 600 + Math.floor(Math.random() * 600);
@@ -27601,8 +28868,9 @@ function itemInfo(bot, name, id) {
     const healHits = typeof heal === 'number' ? heal : heal && typeof heal.hits === 'number' ? heal.hits : null;
     if (healHits != null) bits.push(`it heals ${healHits} hits when eaten.`);
     if (!bits.length) {
-        // plain item: value + members
-        bits.push(`${dn}${d.members ? ' (members)' : ''} is worth about ${d.price} coins.`);
+        // plain item: value + members; coins get a shrug
+        if (/^coins?$/i.test(dn)) bits.push('coins are worth exactly what they say, mate.');
+        else bits.push(`${dn}${d.members ? ' (members)' : ''} is worth about ${d.price} coins.`);
     } else if (d.price) {
         bits.push(`worth about ${d.price} coins${d.members ? ', members' : ''}.`);
     }
@@ -28368,11 +29636,18 @@ function watchdog(bot) {
     // or party, trading, or about to speak all count as social, not frozen
     const now = (bot.world && bot.world.ticks) | 0;
     let socially = false;
-    if (bot._holdTicks > 0 || (bot._sayQueue && bot._sayQueue.length)) socially = true;
+    // only a queued line to a human holds the rescue off
+    if (bot._holdTicks > 0 || (bot._sayQueue && bot._sayQueue.some((e) => e && e.human))) socially = true;
     if (!socially && bot.interfaceOpen && (bot.interfaceOpen.trade || bot.interfaceOpen.bank)) socially = true;
+    // only a live thread with a human holds the rescue off
     if (!socially && bot._threads) {
         for (const k in bot._threads) {
-            if (bot._threads[k] && now - bot._threads[k].lastTick <= 60) { socially = true; break; }
+            const th = bot._threads[k];
+            if (!th || now - th.lastTick > 60) continue;
+            let partner = null;
+            try { partner = bot.world && bot.world.players && bot.world.players.getByUsername ? bot.world.players.getByUsername(k) : null; } catch (e) { partner = null; }
+            if (!partner) { try { for (const o of bot.getNearbyEntities('players', 24)) { if (o && o.username === k) { partner = o; break; } } } catch (e) {} }
+            if (partner && !partner.isBot) { socially = true; break; }
         }
     }
     if (!socially && (bot._follow || (bot.party && bot.party.members))) {
@@ -28387,6 +29662,19 @@ function watchdog(bot) {
     }
     if (!socially && bot._wakeTick && now < bot._wakeTick) socially = true;
 
+    // a lock with no reason left (no fight, interface, gathering or movement) is dropped after 150 ticks
+    if (bot.locked && !bot.opponent && !bot.gatheringSkill && bot.x === w.x && bot.y === w.y &&
+        !(bot.interfaceOpen && (bot.interfaceOpen.trade || bot.interfaceOpen.bank || bot.interfaceOpen.shop || bot.interfaceOpen.sleep))) {
+        w.lockedTicks = (w.lockedTicks | 0) + 1;
+        if (w.lockedTicks > 150) {
+            w.lockedTicks = 0;
+            try { bot.unlock(); } catch (e) {}
+            if (bot.walkQueue) bot.walkQueue.length = 0;
+        }
+    } else {
+        w.lockedTicks = 0;
+    }
+
     const active =
         bot.x !== w.x ||
         bot.y !== w.y ||
@@ -28400,6 +29688,7 @@ function watchdog(bot) {
         w.x = bot.x;
         w.y = bot.y;
         w.still = 0;
+        w.wanted = false;
         // reset the ladder only after sustained self-movement, not the one active tick after a rescue hop
         w.activeStreak = (w.activeStreak || 0) + 1;
         if (w.activeStreak >= 50) {
@@ -28410,6 +29699,13 @@ function watchdog(bot) {
     w.activeStreak = 0;
 
     w.still += 1;
+    // travel intent at any point of the still streak counts
+    const wantsNow = !!(bot._travel || bot._chatGoto || bot._follow || bot._wanderTrek ||
+        bot._bankRun || bot._shopTrip || bot._gearRun || bot._foodRun || bot._quest ||
+        bot._ammoRun || bot._runeRun || bot._processTrip || bot._needTrip || bot._agilityRun ||
+        bot._prayerRun || bot._spawnRun || bot._deathRun || bot._relocateSite || bot._hubVisit ||
+        bot._auctionRun);
+    if (wantsNow) w.wanted = true;
     if (w.still <= STUCK_TICKS) {
         return false;
     }
@@ -28418,7 +29714,7 @@ function watchdog(bot) {
     // a bot with no travel intent is idle, not stuck: reset task state, don't teleport.
     // every trip flag a bot can carry (matches pacing.isBusy); a bot wedged during
     // any of them must reach the rescue ladder below.
-    const wantsToMove = !!(bot._travel || bot._chatGoto || bot._follow || bot._wanderTrek ||
+    const wantsToMove = w.wanted || !!(bot._travel || bot._chatGoto || bot._follow || bot._wanderTrek ||
         bot._bankRun || bot._shopTrip || bot._gearRun || bot._foodRun || bot._quest ||
         bot._ammoRun || bot._runeRun || bot._processTrip || bot._needTrip || bot._agilityRun ||
         bot._prayerRun || bot._spawnRun || bot._deathRun || bot._relocateSite || bot._hubVisit ||
@@ -28608,8 +29904,8 @@ function recordShared(witnesses, subj, num, saga) {
 function speak(bot, line) {
     try {
         let out = line; try { out = mod_voice().apply(bot, line); } catch (e) {}
-        bot._reactionSpeak = true;
-        try { bot.broadcastChat(out); } finally { bot._reactionSpeak = false; }
+        // told to the gathering, so it can be answered
+        bot.broadcastChat(out);
     } catch (e) {}
 }
 
@@ -29349,9 +30645,28 @@ function onTick(bot) {
     }
 }
 
+// strongest remembered danger and loot spots, as world coords
+function topAreas(bot) {
+    const m = mem(bot);
+    if (!m) { return []; }
+    const out = [];
+    const push = (map, kind, min) => {
+        for (const k of Object.keys(map || {})) {
+            const v = map[k];
+            if (v < min) { continue; }
+            const parts = k.split(',').map(Number);
+            out.push({ kind, x: (parts[0] * AREA_CELL + AREA_CELL / 2) | 0, y: (parts[1] * AREA_CELL + AREA_CELL / 2) | 0, score: v });
+        }
+    };
+    push(m.dangerAreas, 'danger', 8);
+    push(m.richAreas, 'rich', 10);
+    return out.sort((a, b) => b.score - a.score).slice(0, 4);
+}
+
 module.exports = {
     onTick,
     onDeath,
+    topAreas,
     onPvpKill,
     pvpConfidenceMod,
     holdsGrudge,
@@ -29610,8 +30925,8 @@ function onTick(bot) {
             // bond nearby bots a little
             try { mod('social-emergent').bondNearby(bot, 0.3); } catch (e) {  }
         } else {
-            bot._reactionSpeak = true;
-            try { bot.broadcastChat(out); } finally { bot._reactionSpeak = false; }
+            // a small level is said aloud too
+            bot.broadcastChat(out);
         }
     } catch (e) {  }
     return true;
@@ -30301,7 +31616,9 @@ const ABBREV = {
     smth: 'something', sth: 'something', sry: 'sorry', soz: 'sorry', ofc: 'of course', wtf: 'what',
     nite: 'night', gn: 'good night', gm: 'good morning', hbu: 'how about you', wbu: 'what about you',
     fren: 'friend', gud: 'good', gr8: 'great', luv: 'love', kewl: 'cool', ne: 'any', nething: 'anything',
-    sec: 'second', min: 'minute', mins: 'minutes', b4: 'before', tmrw: 'tomorrow', tho: 'though'
+    sec: 'second', min: 'minute', mins: 'minutes', b4: 'before', tmrw: 'tomorrow', tho: 'though',
+    // voice.js typo forms read back exactly
+    teh: 'the', adn: 'and', taht: 'that', wiht: 'with', jsut: 'just', waht: 'what', nvie: 'nice'
 };
 
 // keywords a typo can be corrected to (edit distance 1; token must be 4+ letters)
@@ -30323,6 +31640,9 @@ const LEXICON = [
     'world', 'place', 'spot', 'stuff', 'gear', 'food', 'bread', 'lobster', 'trout', 'shrimp', 'salmon'
 ];
 const LEX_SET = new Set(LEXICON);
+// npc names that are plain words for people (and greeting idioms), never read as a monster
+const PEOPLE_WORDS = new Set(['adventurer', 'man', 'woman', 'boy', 'girl', 'child', 'person', 'friend', 'stranger', 'player', 'farmer', 'cook', 'fisherman', 'miner', 'woodcutter', 'smith', 'monk', 'thief', 'wizard', 'shopkeeper', 'shop keeper', 'guide', 'banker', 'barbarian', 'warrior', 'archer', 'mage',
+    'rogue', 'rascal', 'hero', 'legend', 'champion', 'king', 'queen', 'lord', 'lady', 'master', 'chief', 'jester', 'fool', 'pirate', 'knight', 'soldier']);
 // ordinary english the corrector leaves alone though one edit from a lexicon word
 const COMMON = new Set(('the a an and or but so then if of to in on at by for with from into onto over under about ' +
     'i me my mine you your yours he him his she her hers it its we us our they them their this that these those ' +
@@ -30384,7 +31704,9 @@ const SKILL_PATTERNS = [
 const ACT_RULES = [
     ['story', /\b(tell me a (story|tale|joke)|tell us a (story|tale|joke)|got a (story|tale|joke)|got any (stories|tales|jokes)|any (stories|tales|jokes)|tell me something (interesting|funny|good|exciting)|entertain me|tell me about your (day|adventures|travels))\b/],
     ['whatsNew', /\b(what's new|anything new|any news|what have you been up to|what you been up to|how have you been|how've you been|how you been|what did you do today|what have you done today|been up to much|up to much|what's been happening|what happened today|any adventures|done anything (good|fun|exciting)|what's the latest)/],
-    ['howAreYou', /\b(how are you|how're you|how you doing|how are things|how's it going|how is it going|you ok\b|you alright|you good\b|are you ok\b|are you alright|are you well|what's up\b|how's life|how's things|how do you do|how goes it|how are we)/],
+    // tenure question
+    ['askTenure', /\b(been (playing|at (it|this)|out here|around|about|adventuring) long|how long (have|has|'ve) (you|u) (been )?(playing|at it|been (here|around|about|out here|adventuring))|how long (you|u) been (playing|here|around|at it)|play(ed|ing)? (for )?long)\b/],
+    ['howAreYou', /\b(how are you|how're you|how you doing|how are things|how's it going|how is it going|you ok\b|you alright|you good\b|are you ok\b|are you alright|are you well|what's up\b|how's life|how's things|how do you do|how goes it|how are we|how's (your|the|ur) (day|night|morning|afternoon|evening|road|trip|hunt|training|fishing|mining|chopping)( going| been| treating you| going for you)?|how('s| is) (it|everything|life|things) (been|going|treating you)|how are you (keeping|finding it|getting on)|how you keeping|keeping well)/],
     ['whatDoing', /\b(what are you doing|what you doing|what are you up to|what you up to|whatcha doing|what are you working on|what's the plan|what you on\b|what are you on\b|what are you after|what brings you|you busy|u busy|are you busy|busy\?|keeping busy|what you been doing)/],
     ['whoAreYou', /\b(who are you|what's your name|your name\b|who is this|who's this|who's that|introduce yourself|who am i talking to|do i know you)/],
     ['askLevel', /\b(what level are you|what's your level|your level|how strong are you|your combat|combat level|what level\b|how good are you|how high are you|what are your stats|your stats)/],
@@ -30604,8 +31926,8 @@ function analyze(text, ctx) {
     entities.players = findNames(norm, ctx.nearbyNames);
     entities.skills = findSkills(norm);
     entities.numbers = (norm.match(/\b\d+\b/g) || []).map((n) => parseInt(n, 10));
-    // longest name present as whole words; tables indexed by first word so only a few names are checked
-    const findEntity = (table) => {
+    // longest name standing as whole words; tables indexed by first word; skip = people words
+    const findEntity = (table, skip) => {
         const index = nameIndex(table);
         const toks = norm.split(/[^a-z0-9']+/);
         let best = null, bestLen = 0;
@@ -30614,20 +31936,23 @@ function analyze(text, ctx) {
             if (!cands) continue;
             for (let ci = 0; ci < cands.length; ci++) {
                 const name = cands[ci][0];
-                if (name.length <= bestLen) continue;
-                const at = norm.indexOf(name);
-                if (at === -1) continue;
-                const before = at === 0 ? ' ' : norm[at - 1];
-                const after = at + name.length >= norm.length ? ' ' : norm[at + name.length];
-                if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) continue;
+                if (name.length <= bestLen || (skip && skip.has(name))) continue;
+                let at = norm.indexOf(name), ok = false;
+                while (at !== -1) {
+                    const before = at === 0 ? ' ' : norm[at - 1];
+                    const after = at + name.length >= norm.length ? ' ' : norm[at + name.length];
+                    if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) { ok = true; break; }
+                    at = norm.indexOf(name, at + 1);
+                }
+                if (!ok) continue;
                 best = { name, id: cands[ci][1] }; bestLen = name.length;
             }
         }
         return best;
     };
     try {
-        if (know.itemByName) { const it = findEntity(know.itemByName); if (it) entities.items.push(it); }
-        if (know.npcByName) { const np = findEntity(know.npcByName); if (np) entities.npcs.push(np); }
+        if (know.itemByName) { const it = findEntity(know.itemByName, null); if (it) entities.items.push(it); }
+        if (know.npcByName) { const np = findEntity(know.npcByName, PEOPLE_WORDS); if (np) entities.npcs.push(np); }
     } catch (e) {}
     let placeHit = null, boss = null, activity = null, quest = null;
     try { placeHit = helpers.placeKeyword ? helpers.placeKeyword(norm) : null; } catch (e) { placeHit = null; }
@@ -30850,7 +32175,7 @@ function act(bot) {
     const energy = mood.of(bot).energy;
     if (Math.random() < 0.008 + (energy < 0.3 ? 0.02 : 0)) {
         if (Math.random() < 0.16) {                       // ~1 in 6 AFKs is a proper stepped-away
-            p.rest = 250 + Math.floor(Math.random() * 550); // ~3-9 min at 640ms/tick
+            p.rest = 120 + Math.floor(Math.random() * 200); // ~1.5-3.5 min at 640ms/tick; a longer stand reads as a frozen bot
             sayAfk(bot);
         } else {
             p.rest = 3 + Math.floor(Math.random() * 10);
@@ -35542,8 +36867,8 @@ function onTick(bot) {
     try { line = require('./chatgen').generate(pick.sit, pick.ctx, bot); } catch (e) {  }
     if (!line) { bot._reflectCd = 500; return false; }
     try {
-        bot._reactionSpeak = true; // a private musing, not news
-        try { bot.broadcastChat(line); } finally { bot._reactionSpeak = false; }
+        // said aloud so a neighbour may answer it
+        bot.broadcastChat(line);
     } catch (e) {  }
     bot._reflectCd = 900 + Math.floor(Math.random() * 900);
     return true;
@@ -36146,12 +37471,13 @@ function onTick(bot) {
     if (Math.random() > 0.15) return false;
     // skip if the crowd is already chattering
     if (!mod('presence').mayChatter(bot)) { bot._roleCd = 120; return false; }
-    bot._roleCd = 500;
+    // an introduction is rare
+    bot._roleCd = 2500 + Math.floor(Math.random() * 2500);
     const line = LINES[role(bot)] || LINES.adventurer;
     try {
         let out = line; try { out = mod('voice').apply(bot, line); } catch (e) {  }
-        bot._reactionSpeak = true;
-        try { bot.broadcastChat(out); } finally { bot._reactionSpeak = false; }
+        // said aloud so a neighbour can answer an introduction
+        bot.broadcastChat(out);
         mod('presence').noteChatter(bot);
     } catch (e) {  }
     return true;
@@ -36603,13 +37929,29 @@ function onTick(bot) {
     } catch (e) {
         return;
     }
-    const target = others.find((o) => o !== bot && o.id !== bot.id);
+    // target score: relationship first, the last partner and anyone mid-greeting lower
+    let target = null, bestScore = -1e9;
+    const nowT = bot.world ? bot.world.ticks | 0 : 0;
+    for (const o of others) {
+        if (!o || o === bot || o.id === bot.id || !o.username) continue;
+        let sc = 1 + Math.random() * 0.5 + Math.max(-2, Math.min(4, sentiment(bot, o.username))) * 0.3;
+        if (bot._lastPartner === o.username) sc -= 0.8;
+        if (nowT - (o._greetedAt || 0) < 40) sc -= 0.5;
+        if (sc > bestScore) { bestScore = sc; target = o; }
+    }
     if (!target) {
         bot._socialCd = 20 + Math.floor(Math.random() * 40);
         return;
     }
 
     const name = nameOf(target);
+
+    // greeted by someone in the crowd moments ago: don't pile on
+    const now = bot.world ? bot.world.ticks | 0 : 0;
+    if (now - (target._greetedAt || 0) < 40) {
+        bot._socialCd = 40 + Math.floor(Math.random() * 80);
+        return;
+    }
 
     // first impression: seed the relationship (once) from a stranger's known reputation
     let reptags = [];
@@ -36684,9 +38026,10 @@ function onTick(bot) {
         noteInteraction(bot, target.username, 0.2);
     }
 
-    // chatty bots come back sooner, quiet ones wait longer; a good mood shortens it
-    const baseCd = 300 + (1 - p.sociability) * 700 - (m.valence - 0.5) * 100;
+    // chatty bots come back sooner, quiet ones wait longer; a good mood shortens it; jittered per bot
+    const baseCd = (300 + (1 - p.sociability) * 700 - (m.valence - 0.5) * 100) * (0.7 + Math.random() * 0.6);
     bot._socialCd = Math.max(60, Math.floor(baseCd));
+    target._greetedAt = now;
 }
 
 // when victim is cut down, its nearby bot friends turn on the killer (plus a pang of grief);
@@ -39333,10 +40676,29 @@ function resolveDest(dest) {
     return null;
 }
 
+// a destination whose journey fails twice within 600 ticks is refused for NO_ROUTE_TICKS
+const NO_ROUTE_TICKS = 1200;
+function destKeyOf(d) { return d && d.coord ? d.coord.x + ',' + d.coord.y : null; }
+function journeyFailed(bot, t) {
+    if (!bot || !t || !t.destKey) return;
+    const now = (bot.world && bot.world.ticks) | 0;
+    const fails = bot._routeFails || (bot._routeFails = {});
+    const f = fails[t.destKey] || { n: 0, at: 0 };
+    f.n = now - f.at < 600 ? f.n + 1 : 1;
+    f.at = now;
+    fails[t.destKey] = f;
+    if (f.n >= 2) { (bot._noRoute || (bot._noRoute = {}))[t.destKey] = now + NO_ROUTE_TICKS; f.n = 0; }
+}
+
 // plan a route and stash it on the bot; returns true if a route was found
 function begin(bot, dest) {
     const d = resolveDest(dest);
     if (!d) {
+        bot._travel = null;
+        return false;
+    }
+    const destKey = destKeyOf(d);
+    if (destKey && bot._noRoute && bot._noRoute[destKey] > ((bot.world && bot.world.ticks) | 0)) {
         bot._travel = null;
         return false;
     }
@@ -39369,6 +40731,7 @@ function begin(bot, dest) {
         stairAt,
         portalAt,
         stage: 0,
+        destKey,
         name: typeof dest === 'string' ? dest : null
     };
     return true;
@@ -39398,6 +40761,17 @@ function blockedNpcTiles(bot, wp) {
         if (npc.definition.hostility && !npc.opponent) {
             blocked.add(`${npc.x},${npc.y}`);
         }
+    }
+    // the engine refuses a walk that ends on an occupied tile: near the waypoint every occupied tile is off limits
+    if (wp) {
+        try {
+            for (const o of bot.world.players.getInArea(wp.x, wp.y, 8)) {
+                if (o && o !== bot && Math.abs(o.x - wp.x) <= 3 && Math.abs(o.y - wp.y) <= 3) blocked.add(`${o.x},${o.y}`);
+            }
+            for (const n of bot.world.npcs.getInArea(wp.x, wp.y, 8)) {
+                if (n && Math.abs(n.x - wp.x) <= 3 && Math.abs(n.y - wp.y) <= 3) blocked.add(`${n.x},${n.y}`);
+            }
+        } catch (e) {}
     }
     return blocked;
 }
@@ -39499,6 +40873,14 @@ function step(bot) {
         return 'walking';
     }
 
+    // no-progress guard: the same tile for 60 ticks with the walk refused each tick skips the leg
+    if (bot.x === t._px && bot.y === t._py) { t._noMove = (t._noMove | 0) + 1; } else { t._noMove = 0; t._px = bot.x; t._py = bot.y; }
+    if (t._noMove > 60) {
+        t._noMove = 0;
+        t.stage += 1;
+        if (t.stage >= t.waypoints.length) { journeyFailed(bot, t); bot._travel = null; return 'failed'; }
+    }
+
     // skip waypoints already close enough; the final one uses a wider radius (often an NPC tile)
     while (t.stage < t.waypoints.length) {
         const isFinal = t.stage === t.waypoints.length - 1;
@@ -39571,6 +40953,7 @@ function step(bot) {
             if (openNearbyDoor(bot)) {
                 return 'walking';
             }
+            journeyFailed(bot, t);
             bot._travel = null;
             return 'failed';
         }
@@ -39585,6 +40968,7 @@ function step(bot) {
             if (openNearbyDoor(bot)) {
                 return 'walking';
             }
+            journeyFailed(bot, t);
             bot._travel = null;
             return 'failed';
         }
@@ -39620,6 +41004,7 @@ function step(bot) {
     // still stuck, skip ahead; if that was the dest, give up
     t.stage += 1;
     if (t.stage >= t.waypoints.length) {
+        journeyFailed(bot, t);
         bot._travel = null;
         return 'failed';
     }
@@ -39743,7 +41128,7 @@ function style(bot) {
         caps: clamp((p.aggression - 0.55) * 0.35 + (Math.random() - 0.5) * 0.1),
         excite: clamp((p.sociability - 0.3) * 0.5 + p.aggression * 0.2),
         ellipsis: clamp((0.5 - p.sociability) * 0.5 + (0.5 - p.aggression) * 0.15 + Math.random() * 0.1),
-        typo: clamp(casual * 0.12),
+        typo: 0, // off: a planted typo only ever made another bot misread the line
         catchRate: clamp(0.06 + (p.sociability - 0.4) * 0.15),
         catchphrase: pickCatch(p, moodEnergy(bot))
     };

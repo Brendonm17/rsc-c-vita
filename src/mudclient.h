@@ -1291,8 +1291,9 @@ struct mudclient {
     int game_option_types[50];
 
     Panel *panel_control_options;
-    void *control_options[50];
-    int control_option_types[50];
+    // three vita adjusters (8 controls each) plus the rows: 50 was one adjuster short
+    void *control_options[64];
+    int control_option_types[64];
 
     Panel *panel_ui_options;
     void *ui_options[50];
