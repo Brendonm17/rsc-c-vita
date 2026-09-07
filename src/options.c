@@ -1,5 +1,7 @@
 #include "options.h"
 
+#include <stdint.h> // INT32_MIN/MAX for the favourite bitmasks
+
 #if defined(__unix__) || defined(__unix) ||                                    \
     (defined(__APPLE__) && defined(__MACH__))
 #include <sys/stat.h>
@@ -51,8 +53,7 @@ void options_set_defaults(Options *options) {
     options->version_sounds = VERSION_SOUNDS;
     options->version_textures = VERSION_TEXTURES;
     options->fatigue = 1;
-    // 52 = authentic 50 + this build's 2 custom quests (Rune Mysteries, Peeling the Onion); bounds the quest-tab
-    // render loop
+    // 52 = authentic 50 + 2 custom quests; bounds the quest-tab render loop
     options->max_quests = 52;
     options->max_skills = 18;
     options->registration = 0;
@@ -102,6 +103,11 @@ void options_set_defaults(Options *options) {
     options->vita_cursor_style = 0;
     options->vita_cursor_sensitivity = 14;
     options->vita_stick_deadzone = 37;
+
+    options->autocast = 0;
+    options->spell_favourites_lo = 0;
+    options->spell_favourites_hi = 0;
+    options->prayer_favourites = 0;
 
     /* display */
     options->lowmem = 0;
@@ -160,7 +166,7 @@ void options_set_vanilla(Options *options) {
     options->version_sounds = VERSION_SOUNDS;
     options->version_textures = VERSION_TEXTURES;
     options->fatigue = 1;
-    // 52 = authentic 50 + 2 custom quests (Rune Mysteries, Peeling the Onion)
+    // 52 = authentic 50 + 2 custom quests; bounds the quest-tab render loop
     options->max_quests = 52;
     options->max_skills = 18;
     options->registration = 0;
@@ -168,7 +174,7 @@ void options_set_vanilla(Options *options) {
     options->remember_username = 1;
     options->spnet_adhoc = 0;
 #ifdef __vita__
-    options->remember_password = 1;
+    options->remember_password = 1; // pre-fill the saved password at login
 #else
     options->remember_password = 0;
 #endif
@@ -199,6 +205,11 @@ void options_set_vanilla(Options *options) {
     options->vita_cursor_style = 0;
     options->vita_cursor_sensitivity = 14;
     options->vita_stick_deadzone = 37;
+
+    options->autocast = 0;
+    options->spell_favourites_lo = 0;
+    options->spell_favourites_hi = 0;
+    options->prayer_favourites = 0;
 
     /* display */
     options->lowmem = 0;
@@ -351,7 +362,11 @@ void options_save(Options *options) {
             options->bank_maintain_slot,    //
             options->vita_cursor_style,       //
             options->vita_cursor_sensitivity, //
-            options->vita_stick_deadzone      //
+            options->vita_stick_deadzone,     //
+            options->autocast,                //
+            options->spell_favourites_lo,     //
+            options->spell_favourites_hi,     //
+            options->prayer_favourites        //
     );
 
 #ifdef ANDROID
@@ -438,6 +453,10 @@ void options_load(Options *options) {
     OPTION_INI_INT("vita_cursor_sensitivity", options->vita_cursor_sensitivity, 4,
                    40);
     OPTION_INI_INT("vita_stick_deadzone", options->vita_stick_deadzone, 5, 60);
+    OPTION_INI_INT("autocast", options->autocast, 0, 1);
+    OPTION_INI_INT("spell_favourites_lo", options->spell_favourites_lo, INT32_MIN, INT32_MAX);
+    OPTION_INI_INT("spell_favourites_hi", options->spell_favourites_hi, INT32_MIN, INT32_MAX);
+    OPTION_INI_INT("prayer_favourites", options->prayer_favourites, INT32_MIN, INT32_MAX);
 
     /* display */
     OPTION_INI_INT("lowmem", options->lowmem, 0, 1);

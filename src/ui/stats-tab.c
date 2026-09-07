@@ -1,6 +1,6 @@
 #include "stats-tab.h"
 
-// runecraft and harvesting exist only on custom servers
+// indices 18/19 (runecraft, harvesting) exist only on custom servers
 const char *short_skill_names[] = {
     "Attack",   "Defense",  "Strength", "Hits",      "Ranged",  "Prayer",
     "Magic",    "Cooking",  "Woodcut",  "Fletching", "Fishing", "Firemaking",
@@ -156,8 +156,7 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
 
     int line_break = (is_compact && !is_touch ? 11 : 12);
 
-    // the "Total xp" line follows config 35 online (never on authentic worlds); SP keeps the local option.
-    // shared by height/wiki accounting and the draw so layout always agrees
+    // the "Total xp" line follows config 35 online; SP keeps the local option
 #ifdef WITH_SINGLEPLAYER
     int show_total_xp = MUD_SP_WIRE(mud)
                             ? mud->options->total_experience
@@ -192,13 +191,10 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
     }
 
     if (is_touch) {
-        // 198 fit the 18-skill grid; grow for the extra custom-skill row and
-        // the total-xp line or the combat level and hover footer spill out.
-        // bottom-anchored, so extra height extends upward into free space
+        // 198 fit the 18-skill grid; grow for the extra custom-skill row and total-xp line
         height = 198;
 
-        // SKILLS sub-tab only; the quest list control was laid out against
-        // the fixed 198 box, growing it pushes the list out the bottom
+        // SKILLS sub-tab only; the quest list was laid out against the fixed 198 box
         if (mud->ui_tab_stats_sub_tab == 0) {
             if (mud->player_skill_count > PLAYER_SKILL_COUNT &&
                 mud->options->max_skills >= 18) {
@@ -439,6 +435,7 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
             y += 8;
         }
 
+        // kill counters and elixir now render as the side-menu HUD and bottom-right overlay
 #endif
 
         if (!is_compact) {
@@ -597,7 +594,7 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
         int stats_height = 36 + STATS_HEIGHT + 5;
 
 #ifndef REVISION_177
-        // clicking a quest opens its guide (config 26); the guide tables are indexed by the OpenRSC quest id
+        // clicking a quest opens its guide (config 26)
         if (no_menus && !mud->selected_wiki && mud->protocol_custom &&
             mud->orsc.want_quest_menus && mud->mouse_button_click == 1 &&
             mud->mouse_x > ui_x + 5 && mud->mouse_y > ui_y + 24 + line_break &&
@@ -711,10 +708,17 @@ void mudclient_draw_ui_tab_stats(mudclient *mud, int no_menus) {
 
         if (mud->ui_tab_stats_sub_tab == quest_tab) {
             if (is_touch) {
+                // finger while down, else the stick cursor + X, so the scrollbar drags by both
+                int px = mud->mouse_x, py = mud->mouse_y;
+                int pdown = mud->mouse_button_down;
+                if (mudclient_finger_1_down) {
+                    px = mudclient_finger_1_x;
+                    py = mudclient_finger_1_y;
+                    pdown = 1;
+                }
                 panel_handle_mouse(
-                    mud->panel_quests, mudclient_finger_1_x,
-                    mudclient_finger_1_y, mud->last_mouse_button_down,
-                    mudclient_finger_1_down, mud->mouse_scroll_delta);
+                    mud->panel_quests, px, py, mud->last_mouse_button_down,
+                    pdown, mud->mouse_scroll_delta);
             } else {
                 panel_handle_mouse(mud->panel_quests, mud->mouse_x,
                                    mud->mouse_y, mud->last_mouse_button_down,

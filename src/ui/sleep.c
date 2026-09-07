@@ -102,8 +102,25 @@ void mudclient_draw_sleep(mudclient *mud) {
 
     y += 20;
 
-    surface_draw_stringf_centre(mud->surface, x, y, FONT_BOLD_16, CYAN, "%s*",
-                                mud->input_text_current);
+    if (is_touch) {
+        // touch: outline the input box and show a hint while it is empty
+        int box_x = x - 100;
+        int box_y = y - 11;
+
+        surface_draw_border(mud->surface, box_x, box_y, 200, 22, WHITE);
+
+        if (mud->input_text_current[0] == '\0') {
+            surface_draw_string_centre(mud->surface,
+                                       "Tap here to type the word", x, y,
+                                       FONT_BOLD_12, GREY_BE);
+        } else {
+            surface_draw_stringf_centre(mud->surface, x, y, FONT_BOLD_16,
+                                        CYAN, "%s*", mud->input_text_current);
+        }
+    } else {
+        surface_draw_stringf_centre(mud->surface, x, y, FONT_BOLD_16, CYAN,
+                                    "%s*", mud->input_text_current);
+    }
 
     y += (is_compact ? 16 : 49);
 
@@ -176,6 +193,17 @@ void mudclient_handle_sleep_input(mudclient *mud) {
     int keyboard_y = y + 74 + (is_compact ? 0 : 36);
     int keyboard_width = 200;
     int keyboard_height = 28;
+
+    if (mudclient_is_touch(mud)) {
+        // touch: make the whole input band (box + word image) open the keyboard
+        int input_y = y + (is_compact ? 28 + 25 + 20 + 20 : 40 + 50 + 20 + 20);
+        int image_y = input_y + (is_compact ? 16 : 49);
+
+        keyboard_x = x - 128;
+        keyboard_width = 257;
+        keyboard_y = input_y - 11;
+        keyboard_height = (image_y + 42) - keyboard_y;
+    }
 
     if (mud->last_mouse_button_down == 1 && mud->mouse_x > keyboard_x &&
         mud->mouse_x < keyboard_x + keyboard_width &&

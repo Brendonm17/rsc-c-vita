@@ -1,7 +1,6 @@
 #include "message-tabs.h"
 
-// touch layout: the message-tab buttons live on the BOTTOM edge, offset
-// right so the keyboard button owns the bottom-left corner
+// touch layout: message-tab buttons on the bottom edge, offset right for the keyboard button
 #define MESSAGE_TABS_TOUCH_X 56
 
 void mudclient_create_message_tabs_panel(mudclient *mud) {
@@ -101,14 +100,13 @@ void mudclient_draw_chat_message_tabs(mudclient *mud) {
     }
 
     if (is_touch && mud->options->touch_bottom_ui) {
-        // bottom strip: keyboard button far left, the four tabs fill the
-        // rest of the width; chat text list and input stay at the top
+        // bottom strip: keyboard button far left, the four tabs fill the rest; chat stays at the top
         button_width = (mud->surface->width - MESSAGE_TABS_TOUCH_X - 10) / 4;
 
         x = MESSAGE_TABS_TOUCH_X;
         y = mud->surface->height - 8;
 
-        // 4 tabs only; wiki lookup tab is omitted on vita
+        // 4 tabs only; the wiki lookup tab is omitted on vita
         for (int i = 0; i < 4; i++) {
             int button_x = x + (i * button_width);
             int button_y = y - 13;
@@ -239,7 +237,7 @@ void mudclient_draw_chat_message_tabs_panel(mudclient *mud) {
     panel_text_list_entry_height_mod = 0;
 
     if (is_touch) {
-        // bottom-left corner, bottom edge flush with the tab buttons
+        // default: bottom-left corner, flush with the message-tab strip's buttons
         int keyboard_button_x = 8;
         int keyboard_button_y =
             mud->surface->height - 2 -
@@ -297,7 +295,7 @@ void mudclient_send_chat_message_custom(mudclient *mud, const char *message) {
 
     packet_stream_new_packet(mud->packet_stream, CLIENT_CHAT);
 
-    // smart length: character count, one byte or big-endian short+32768
+    // smart length: character count, one byte or big-endian short + 32768
     if (length < 128) {
         packet_stream_put_byte(mud->packet_stream, length);
     } else {
@@ -312,6 +310,17 @@ void mudclient_send_chat_message_custom(mudclient *mud, const char *message) {
 void mudclient_handle_message_tabs_input(mudclient *mud) {
     int is_touch = mudclient_is_touch(mud);
     int is_compact = mud->surface->width < MUD_VANILLA_WIDTH;
+
+    // active pointer: the live finger while one is down, else the joystick/mouse cursor
+    int pointer_x = mud->mouse_x;
+    int pointer_y = mud->mouse_y;
+    int pointer_down = mud->mouse_button_down;
+
+    if (is_touch && mudclient_finger_1_down) {
+        pointer_x = mudclient_finger_1_x;
+        pointer_y = mudclient_finger_1_y;
+        pointer_down = 1;
+    }
 
     float button_scale =
         is_compact ? mud->surface->width / (float)MUD_MIN_WIDTH : 1;
@@ -328,9 +337,7 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
     if (bottom_ui && mud->last_mouse_button_down == 1 &&
         mud->mouse_x >= MESSAGE_TABS_TOUCH_X &&
         mud->mouse_y > bar_min_y && mud->mouse_y <= bar_max_y) {
-        // bottom strip: same geometry as the draw. Guard x >= MESSAGE_TABS_TOUCH_X so
-        // a tap on the keyboard button (bottom-left, left of the tabs) falls through to
-        // the keyboard-button hit-test below instead of being swallowed here
+        // bottom strip: same geometry as the draw; guard x so a keyboard-button tap falls through
         int button_width =
             (mud->surface->width - MESSAGE_TABS_TOUCH_X - 10) / 4;
         int index = (mud->mouse_x - MESSAGE_TABS_TOUCH_X) / button_width;
@@ -429,9 +436,9 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
             keyboard_button_y = mud->surface->height - 265;
         }
 
-        panel_handle_mouse(mud->panel_message_tabs, mudclient_finger_1_x,
-                           mudclient_finger_1_y, mud->last_mouse_button_down,
-                           mudclient_finger_1_down, mud->mouse_scroll_delta);
+        panel_handle_mouse(mud->panel_message_tabs, pointer_x, pointer_y,
+                           mud->last_mouse_button_down, pointer_down,
+                           mud->mouse_scroll_delta);
 
         char *chat_input =
             mud->panel_message_tabs->control_text[mud->control_text_list_all];
@@ -458,15 +465,25 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
              mud->mouse_y >= chat_input_y - 8 &&
              mud->mouse_y <= chat_input_y + chat_input_height + 4);
 
+        // the button's hit box is bigger than its sprite so a near-miss tap still lands on it
+        int kb_w = mud->surface->sprite_width[mud->sprite_media + 40];
+        int kb_h = mud->surface->sprite_height[mud->sprite_media + 40];
+        int kb_min_x = keyboard_button_x - 6;
+        int kb_max_x = keyboard_button_x + kb_w + 6;
+        int kb_min_y = keyboard_button_y - 6;
+        int kb_max_y = keyboard_button_y + kb_h + 6;
+
+        if (mud->options->touch_bottom_ui && !mud->options->touch_keyboard_right) {
+            kb_min_x = 0;                     // flush with the left edge
+            kb_max_x = MESSAGE_TABS_TOUCH_X; // up to the tab strip
+            kb_max_y = mud->surface->height; // down to the bottom edge
+        } else if (mud->options->touch_keyboard_right) {
+            kb_max_x = mud->surface->width;  // flush with the right edge
+        }
+
         int is_within_button_input =
-            (mud->mouse_x >= keyboard_button_x &&
-             mud->mouse_x <=
-                 keyboard_button_x +
-                     mud->surface->sprite_width[mud->sprite_media + 40] &&
-             mud->mouse_y >= keyboard_button_y &&
-             mud->mouse_y <=
-                 keyboard_button_y +
-                     mud->surface->sprite_height[mud->sprite_media + 40]);
+            (mud->mouse_x >= kb_min_x && mud->mouse_x <= kb_max_x &&
+             mud->mouse_y >= kb_min_y && mud->mouse_y <= kb_max_y);
 
         if (!mud->show_right_click_menu && mud->last_mouse_button_down == 1 &&
             (is_within_chat_input || is_within_button_input)) {
@@ -490,9 +507,9 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
     int min_scrollbar_y = is_touch ? 0 : mud->surface->height - 78;
     int max_scrollbar_y = is_touch ? 102 : mud->surface->height;
 
-    if (mud->message_tab_selected > 0 && mud->mouse_x >= text_list_width - 18 &&
-        mud->mouse_x < text_list_width + 1 && mud->mouse_y >= min_scrollbar_y &&
-        mud->mouse_y <= max_scrollbar_y) {
+    if (mud->message_tab_selected > 0 && pointer_x >= text_list_width - 18 &&
+        pointer_x < text_list_width + 1 && pointer_y >= min_scrollbar_y &&
+        pointer_y <= max_scrollbar_y) {
         mud->last_mouse_button_down = 0;
     }
 
@@ -512,7 +529,7 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
             } else if (strcasecmp(message + 2, "overlay") == 0 &&
                        ((mud->protocol_custom && mud->orsc.side_menu) ||
                         MUD_SP_WIRE(mud))) {
-                // ::overlay flips the side-menu HUD locally, no packet; only the settings checkbox persists it
+                // ::overlay flips the side-menu HUD locally, no packet
                 mud->orsc_show_side_menu = !mud->orsc_show_side_menu;
             } else {
                 mudclient_send_command_string(mud, message + 2);
@@ -522,7 +539,7 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
 
 #ifndef REVISION_177
             if (mud->protocol_custom) {
-                // custom chat uses a different codec and framing than rsc
+                // different codec and framing; see mudclient_send_chat_message_custom()
                 mudclient_send_chat_message_custom(mud, message);
             } else
 #endif
@@ -530,6 +547,7 @@ void mudclient_handle_message_tabs_input(mudclient *mud) {
                 mudclient_send_chat_message(mud, chat_message_encoded,
                                             encoded_length);
             }
+
 
             message =
                 chat_message_decode(chat_message_encoded, 0, encoded_length);

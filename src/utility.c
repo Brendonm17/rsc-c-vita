@@ -1,7 +1,7 @@
 #include "utility.h"
 
 #if defined(__vita__) || defined(__linux__) || defined(__APPLE__)
-#include <time.h>
+#include <time.h> // clock_gettime for mud_mono_ms
 #endif
 
 #if defined(__unix__) || defined(__unix) ||                                    \
@@ -11,7 +11,7 @@
 #endif
 
 #ifdef __vita__
-#include <sys/stat.h>
+#include <sys/stat.h> // mkdir() to create the ux0:data/RuneScape/ data dir
 #include <limits.h>
 #ifndef PATH_MAX
 #define PATH_MAX 1024
@@ -223,8 +223,7 @@ void strtolower(char *s) {
     }
 }
 
-// Server opcode being dispatched (set in packet-handler.c after decode),
-// appended to the over-read warnings below so a read can be traced to its packet.
+// server opcode being dispatched, appended to over-read warnings to trace them to a packet
 int rsc_debug_last_opcode = -1;
 
 int get_signed_byte(void *b, size_t offset, size_t buflen) {
@@ -401,8 +400,7 @@ void format_auth_string(char *raw, int max_length, char *formatted) {
 
     for (int i = 0; i < max_length; i++) {
         if (i >= raw_length) {
-            // read raw[i] only when in bounds; raw can be shorter than max_length and reading past its NUL is
-            // undefined
+            // read raw[i] only when in bounds; raw can be shorter than max_length
             formatted[i] = ' ';
         } else {
             char char_code = raw[i];
@@ -672,7 +670,7 @@ void format_confirm_amount(int amount, char *formatted) {
     }
 }
 
-// monotonic ms with sub ms precision for phase timing
+// monotonic ms with sub-ms precision for phase timing
 double mud_mono_ms(void) {
 #if defined(__vita__) || defined(__linux__) || defined(__APPLE__)
     struct timespec ts;
@@ -990,8 +988,7 @@ void gl_create_texture(GLuint *texture_id) {
 #ifdef __vita__
 #include <png.h>
 
-// libpng PNG decoder returning ABGR8888; bytes land R,G,B,A in memory so GL_RGBA uploads and SDL_GetRGB work
-// unchanged
+// libpng PNG decoder returning ABGR8888; bytes land R,G,B,A in memory so GL_RGBA and SDL_GetRGB work
 SDL_Surface *vita_img_load_png(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
@@ -1070,6 +1067,174 @@ SDL_Surface *vita_img_load_png(const char *path) {
     fclose(fp);
 
     return surface;
+}
+
+// in-memory PNG -> RGBA8 for the sleep-word captcha OpenRSC sends custom-client logins
+struct sleep_png_reader {
+    const uint8_t *data;
+    size_t size;
+    size_t offset;
+};
+
+static void sleep_png_read_fn(png_structp png, png_bytep out,
+                              png_size_t length) {
+    struct sleep_png_reader *reader =
+        (struct sleep_png_reader *)png_get_io_ptr(png);
+
+    if (reader->offset + length > reader->size) {
+        png_error(png, "sleep png truncated");
+        return;
+    }
+
+    memcpy(out, reader->data + reader->offset, length);
+    reader->offset += length;
+}
+
+uint8_t *sleep_png_decode_rgba(const uint8_t *data, int length, int *width,
+                               int *height) {
+    if (data == NULL || length < 8 ||
+        png_sig_cmp((png_const_bytep)data, 0, 8) != 0) {
+        return NULL;
+    }
+
+    png_structp png =
+        png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png_infop info = png ? png_create_info_struct(png) : NULL;
+
+    if (!png || !info) {
+        if (png) {
+            png_destroy_read_struct(&png, info ? &info : NULL, NULL);
+        }
+        return NULL;
+    }
+
+    // volatile: written after setjmp and read in the error path
+    uint8_t *volatile out = NULL;
+    png_bytep *volatile rows = NULL;
+
+    if (setjmp(png_jmpbuf(png))) {
+        png_destroy_read_struct(&png, &info, NULL);
+        free(rows);
+        free(out);
+        return NULL;
+    }
+
+    struct sleep_png_reader reader = {data, (size_t)length, 0};
+    png_set_read_fn(png, &reader, sleep_png_read_fn);
+    png_read_info(png, info);
+
+    int w = png_get_image_width(png, info);
+    int h = png_get_image_height(png, info);
+    png_byte colour_type = png_get_color_type(png, info);
+    png_byte bit_depth = png_get_bit_depth(png, info);
+
+    // normalise every input variant to 8-bit RGBA (as vita_img_load_png)
+    if (bit_depth == 16) {
+        png_set_strip_16(png);
+    }
+    if (colour_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_palette_to_rgb(png);
+    }
+    if (colour_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+        png_set_expand_gray_1_2_4_to_8(png);
+    }
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) {
+        png_set_tRNS_to_alpha(png);
+    }
+    if (colour_type == PNG_COLOR_TYPE_RGB ||
+        colour_type == PNG_COLOR_TYPE_GRAY ||
+        colour_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_filler(png, 0xff, PNG_FILLER_AFTER);
+    }
+    if (colour_type == PNG_COLOR_TYPE_GRAY ||
+        colour_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png);
+    }
+
+    png_read_update_info(png, info);
+
+    // a captcha is ~255x40; anything huge is not one
+    if (w <= 0 || h <= 0 || w > 2048 || h > 2048 ||
+        png_get_rowbytes(png, info) != (size_t)w * 4) {
+        png_destroy_read_struct(&png, &info, NULL);
+        return NULL;
+    }
+
+    out = malloc((size_t)w * h * 4);
+    rows = malloc((size_t)h * sizeof(png_bytep));
+
+    if (out == NULL || rows == NULL) {
+        png_destroy_read_struct(&png, &info, NULL);
+        free(rows);
+        free(out);
+        return NULL;
+    }
+
+    for (int y = 0; y < h; y++) {
+        rows[y] = out + (size_t)y * w * 4;
+    }
+
+    png_read_image(png, rows);
+    png_destroy_read_struct(&png, &info, NULL);
+    free(rows);
+
+    *width = w;
+    *height = h;
+
+    return out;
+}
+#elif defined(RENDER_GL) && defined(SDL2) && !defined(__SWITCH__) &&           \
+    !defined(ANDROID) && !defined(EMSCRIPTEN)
+// desktop builds have SDL2_image
+uint8_t *sleep_png_decode_rgba(const uint8_t *data, int length, int *width,
+                               int *height) {
+    SDL_RWops *rw = SDL_RWFromConstMem(data, length);
+
+    if (rw == NULL) {
+        return NULL;
+    }
+
+    SDL_Surface *loaded = IMG_Load_RW(rw, 1);
+
+    if (loaded == NULL) {
+        return NULL;
+    }
+
+    SDL_Surface *rgba =
+        SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_RGBA32, 0);
+
+    SDL_FreeSurface(loaded);
+
+    if (rgba == NULL) {
+        return NULL;
+    }
+
+    uint8_t *out = malloc((size_t)rgba->w * rgba->h * 4);
+
+    if (out != NULL) {
+        for (int y = 0; y < rgba->h; y++) {
+            memcpy(out + (size_t)y * rgba->w * 4,
+                   (uint8_t *)rgba->pixels + (size_t)y * rgba->pitch,
+                   (size_t)rgba->w * 4);
+        }
+
+        *width = rgba->w;
+        *height = rgba->h;
+    }
+
+    SDL_FreeSurface(rgba);
+
+    return out;
+}
+#else
+// no PNG decoder on this platform; the sleep screen shows its fallback
+uint8_t *sleep_png_decode_rgba(const uint8_t *data, int length, int *width,
+                               int *height) {
+    (void)data;
+    (void)length;
+    (void)width;
+    (void)height;
+    return NULL;
 }
 #endif
 
@@ -1180,5 +1345,17 @@ int _3ds_gl_rgba5551_to_rgb32(uint16_t colour16) {
 
     /* combine channels into a 32-bit color value */
     return (r8 << 16) | (g8 << 8) | b8;
+}
+#endif
+
+#ifndef RENDER_GL
+// software / 3DS-GL builds have no in-memory PNG decoder; the sleep captcha shows its fallback
+uint8_t *sleep_png_decode_rgba(const uint8_t *data, int length, int *width,
+                               int *height) {
+    (void)data;
+    (void)length;
+    (void)width;
+    (void)height;
+    return NULL;
 }
 #endif

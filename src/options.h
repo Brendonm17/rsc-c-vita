@@ -175,7 +175,13 @@ typedef struct Options Options;
      "; Vita: left-stick cursor speed (pixels/frame at full deflection)\n"      \
      "vita_cursor_sensitivity = %d\n"                                          \
      "; Vita: analog-stick dead-zone (percent of full deflection)\n"            \
-     "vita_stick_deadzone = %d\n")
+     "vita_stick_deadzone = %d\n\n"                                            \
+     "; Keep a combat spell armed so clicking an enemy re-casts it\n"          \
+     "autocast = %d\n"                                                         \
+     "; Favourite spells/prayers pinned to the top of the list (bitmasks)\n"   \
+     "spell_favourites_lo = %d\n"                                              \
+     "spell_favourites_hi = %d\n"                                              \
+     "prayer_favourites = %d\n")
 
 #define OPTION_INI_STR(name, option, length)                                   \
     {                                                                          \
@@ -317,6 +323,15 @@ struct Options {
 
     // Vita: analog-stick dead-zone as a percent of full deflection
     int vita_stick_deadzone;
+
+    // keep a combat spell armed so clicking an enemy re-casts it
+    int autocast;
+
+    // favourite spells/prayers pinned to the top of their list, as bitmasks
+    // spells 0-31 in _lo, 32-63 in _hi; prayers 0-31
+    int spell_favourites_lo;
+    int spell_favourites_hi;
+    int prayer_favourites;
 
     /* low memory mode */
     int lowmem;

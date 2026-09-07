@@ -5,7 +5,7 @@ static bool sound_visible(mudclient *mud) {
     return mud->options->members && !mud->options->lowmem;
 }
 
-// name and clan tag row shown only when clans + nametags are on
+// name and clan tag row, shown only when clans and floating nametags are on
 static bool nametag_row_visible(mudclient *mud) {
 #ifdef REVISION_177
     (void)mud;
@@ -198,6 +198,9 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
         height = 152;
     }
 
+    // the auto-cast spell row needs a line of height in both layouts
+    height += OPTIONS_LINE_BREAK;
+
     if (mud->options->show_additional_options && sound_visible(mud)) {
         height += OPTIONS_LINE_BREAK;
     }
@@ -213,7 +216,7 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
     if (is_touch) {
         height = 198;
 
-        // re-adds the row so touch's fixed-height panel grows to fit
+        // re-add the row so touch's fixed-height panel grows to fit
         if (nametag_row_visible(mud)) {
             height += OPTIONS_LINE_BREAK;
         }
@@ -321,6 +324,15 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
 
     y += OPTIONS_LINE_BREAK;
 
+    // keep a combat spell armed after casting (auto-cast)
+    sprintf(settings_string, "Auto-cast spell - %s",
+            (mud->options->autocast ? "@gre@On" : "@red@Off"));
+
+    surface_draw_string(mud->surface, settings_string, x, y, FONT_BOLD_12,
+                        WHITE);
+
+    y += OPTIONS_LINE_BREAK;
+
     if (sound_visible(mud)) {
         sprintf(settings_string, "Sound effects - %s",
                 (mud->settings_sound_disabled ? "@red@off" : "@gre@on"));
@@ -332,7 +344,7 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
     }
 
 #ifndef REVISION_177
-    // row text: "Name and Clan Tag - On/Off"
+    // row text: "Name and Clan Tag - @gre@On" / "@red@Off"
     if (nametag_row_visible(mud)) {
         sprintf(settings_string, "Name and Clan Tag - %s",
                 (mud->orsc_name_clan_tag_overlay ? "@gre@On" : "@red@Off"));
@@ -577,6 +589,19 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
 
         y += OPTIONS_LINE_BREAK;
 
+        // auto-cast toggle, persisted in options.ini
+        if (mud->mouse_x > x && mud->mouse_x < x + OPTIONS_WIDTH &&
+            mud->mouse_y > y - 12 && mud->mouse_y < y + 4 &&
+            mud->mouse_button_click == 1) {
+            mud->options->autocast = !mud->options->autocast;
+            if (!mud->options->autocast) {
+                mud->selected_spell = -1; // disarm the spell when off
+            }
+            options_save(mud->options);
+        }
+
+        y += OPTIONS_LINE_BREAK;
+
         if (sound_visible(mud) && mud->mouse_x > x &&
             mud->mouse_x < x + OPTIONS_WIDTH && mud->mouse_y > y - 12 &&
             mud->mouse_y < y + 4 && mud->mouse_button_click == 1) {
@@ -595,7 +620,7 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
         }
 
 #ifndef REVISION_177
-        // mirrors the draw pass; both walk the same y cursor
+        // mirrors the draw pass above; both walk the same y cursor
         if (nametag_row_visible(mud)) {
             if (mud->mouse_x > x && mud->mouse_x < x + OPTIONS_WIDTH &&
                 mud->mouse_y > y - 12 && mud->mouse_y < y + 4 &&
@@ -603,7 +628,7 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
                 mud->orsc_name_clan_tag_overlay =
                     !mud->orsc_name_clan_tag_overlay;
 
-                // sends the floating-nametags setting toggle
+                // floating-nametags toggle: packet 111 + u8 setting 35 + u8 state
                 packet_stream_new_packet(mud->packet_stream,
                                          CLIENT_SETTINGS_GAME);
 
@@ -634,9 +659,7 @@ void mudclient_draw_ui_tab_options(mudclient *mud, int no_menus) {
         if (!is_compact) {
             y += OPTIONS_LINE_BREAK + 5;
         } else if (is_touch && mud->options->account_management) {
-            // this spacer is the touch Security header, only drawn under
-            // account management; unconditional it shifted every click
-            // window below the privacy section one row down
+            // touch "Security settings" header spacer, only under account management
             y += OPTIONS_LINE_BREAK - 4;
         }
 

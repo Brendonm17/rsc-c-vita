@@ -3,8 +3,8 @@
 #include "protocol177.h"
 
 #ifndef REVISION_177
-// map 14 server equipment slots to the 11-slot paperdoll: helm/body/skirt overlay the plate slots, then slots 8..13
-// shift down 3
+// map the 14 server equipment slots to the 11-slot paperdoll: helm/body/skirt
+// overlay the plate slots, then slots 8..13 shift down 3
 static int orsc_equip_collapse_slot(int wield_pos) {
     switch (wield_pos) {
     case 5:
@@ -18,8 +18,8 @@ static int orsc_equip_collapse_slot(int wield_pos) {
     }
 }
 
-// read one newline(0x0A)-terminated string, advancing *offset past the terminator; truncates to out_max-1, always
-// NUL-terminates
+// read one newline(0x0A)-terminated string, advancing *offset past the
+// terminator. truncates to out_max-1, always NUL-terminates
 static void orsc_read_string(int8_t *data, size_t *offset, size_t size,
                              char *out, int out_max) {
     int length = 0;
@@ -40,7 +40,7 @@ static void orsc_read_string(int8_t *data, size_t *offset, size_t size,
     out[length] = '\0';
 }
 
-// colour code that precedes a player's name when S_WANT_CUSTOM_RANK_DISPLAY (config 39) is on
+// colour code that precedes a player's name when custom rank display (config 39) is on
 const char *orsc_staff_prefix(mudclient *mud, int group_id) {
     if (!mud->orsc.want_custom_rank_display) {
         return "";
@@ -53,13 +53,13 @@ const char *orsc_staff_prefix(mudclient *mud, int group_id) {
     case 3:  return "@bl1@"; // Moderator
     case 5:  return "@red@"; // Developer
     case 7:  return "@eve@"; // Event
-    // 8 Player Moderator, 9 Tester, 10 User: no colour, like theirs
+    // 8 Player Moderator, 9 Tester, 10 User: no colour
     default: return "";
     }
 }
 
-// trade/duel item list: u8 count, then per item u16 id, [u8 noted iff world accepts notes], i32 amount; entries past
-// TRADE_ITEMS_MAX are parsed and dropped
+// trade/duel item list: u8 count, then per item u16 id, [u8 noted iff the world
+// accepts notes], i32 amount. entries past TRADE_ITEMS_MAX are parsed and dropped
 static int orsc_read_transaction_list(int8_t *data, int size, int offset,
                                       int notes, int *out_count, int *ids,
                                       int *amounts, uint8_t *noted) {
@@ -90,8 +90,8 @@ static int orsc_read_transaction_list(int8_t *data, int size, int offset,
     return offset;
 }
 
-// custom SEND_UPDATE_PLAYERS: shares opcode 204 but diverges. username and chat are plain newline-terminated strings
-// (not base37 Long / RSCString), worn items are shorts not bytes, header count includes HP updates, types 7 (muted chat) 8 (heal) 9 (hp) are custom-only, type 5 carries a clan/invisibility/group/icon trailer
+// custom SEND_UPDATE_PLAYERS: shares opcode 204 but diverges. plain newline username/chat, worn items are shorts
+// header count includes hp updates; types 7/8/9 are custom-only; type 5 carries a clan/group/icon trailer
 static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
     int count = get_unsigned_short(data, 1, size);
     int offset = 3;
@@ -168,8 +168,8 @@ static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
             player->message_timeout = 150;
             strcpy(player->message, message);
 
-            // prefix order: [MUTED], [TUTORIAL], clan tag, name; quest chat (6) shows only for the local player and
-            // carries no crown
+            // prefix order: [MUTED], [TUTORIAL], clan tag, name; quest chat (6)
+            // shows only for the local player and carries no crown
             if (update_type == 6) {
                 if (player != mud->local_player) {
                     continue;
@@ -189,7 +189,11 @@ static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
 
                 mudclient_show_message(mud, formatted, MESSAGE_TYPE_QUEST);
             } else {
-                // 24 bytes of markup wrap the tag
+                /* 24 bytes of markup wrap the tag. Sized off the field, not off
+                 * their "clanTag.length() > 5" rule (InterfaceOptionHandler:372)
+                 * -- that is the server's own validation, and nothing on this
+                 * path re-checks it, so a 15-char tag would otherwise truncate
+                 * the closing colour code and mis-colour the rest of the line. */
                 char clan_prefix[sizeof(player->clan_tag) + 24] = {0};
 
                 if (player->clan_tag[0] != '\0') {
@@ -254,8 +258,8 @@ static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
                 }
             }
         } else if (update_type == 5) {
-            // appearance and identity; sized to player->name, so a long name truncates at out_max-1 instead of
-            // overrunning the 13-byte field
+            // appearance and identity; sized to player->name, so a long name
+            // truncates at out_max-1 instead of overrunning the 13-byte field
             char username[MAX_USER_LENGTH + 1] = {0};
             size_t name_offset = (size_t)offset;
 
@@ -349,7 +353,7 @@ static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
                 }
             }
         } else if (update_type == 9) {
-            // hp only, no damage number. Authentic folds this into type 2.
+            // hp only, no damage number; authentic folds this into type 2
             int current = get_unsigned_byte(data, offset++, size);
             int max = get_unsigned_byte(data, offset++, size);
 
@@ -371,8 +375,8 @@ static void orsc_handle_player_update(mudclient *mud, int8_t *data, int size) {
     }
 }
 
-// custom SEND_FRIEND_UPDATE: the friend list is built from a stream of these, one per friend, an unknown name
-// appends. layout: String currentName, String formerName, u8 onlineStatus, [String worldName when the online bit is set]; onlineStatus bit 0 = rename, bit 2 = online
+// custom SEND_FRIEND_UPDATE: the friend list is built from a stream of these, one per friend, an unknown name appends
+// layout: currentName, formerName, u8 onlineStatus, [worldName when online]; onlineStatus bit 0 = rename, bit 2 = online
 static void orsc_handle_friend_update(mudclient *mud, int8_t *data, int size) {
     size_t offset = 1;
 
@@ -400,7 +404,8 @@ static void orsc_handle_friend_update(mudclient *mud, int8_t *data, int size) {
     int64_t current_encoded = encode_username(current_name);
     int64_t former_encoded = encode_username(former_name);
 
-    // world column is a name that can't map to a number; collapse to the "online, same world" sentinel
+    // world column is a name that can't map to a number; collapse to the
+    // "online, same world" sentinel
     int world = is_online ? MUD_FRIEND_ONLINE(mud) : 0;
 
     int64_t match = is_rename ? former_encoded : current_encoded;
@@ -447,8 +452,8 @@ static void orsc_handle_friend_update(mudclient *mud, int8_t *data, int size) {
     mudclient_sort_friends(mud);
 }
 
-// custom SEND_UPDATE_NPC: shared opcode, different wire. npc chat is a plain newline-terminated string, header count
-// includes the custom-only queues (projectiles, skulls, wields, bubbles), types 3-7 are custom-only. type 1's message string is always consumed and applied only when the npc is known. type 7 sets bubble_item without arming the timeout, so the bubble never draws
+// custom SEND_UPDATE_NPC: shared opcode, different wire. npc chat is a newline-terminated string; types 3-7 custom-only
+// type 1's message is consumed but applied only when the npc is known; type 7 sets bubble_item without arming the timeout
 static void orsc_handle_npc_update(mudclient *mud, int8_t *data, int size) {
     int count = get_unsigned_short(data, 1, size);
     int offset = 3;
@@ -659,8 +664,8 @@ void mudclient_gl_update_wall_models(mudclient *mud) {
     int ebo_offset = 0;
 
 #if defined(__vita__) && defined(RENDER_GL)
-    // plan the door buffer's two-segment EBO layout: segment A = noclip-safe door faces, segment B = alpha-cutout
-    // (gates/bars)
+    // plan the door buffer's two-segment EBO layout: segment A = noclip-safe
+    // door faces, segment B = alpha-cutout (gates/bars)
     int noclip_total = 0;
 
     for (int i = 0; i < mud->wall_object_count; i++) {
@@ -719,12 +724,101 @@ void mudclient_gl_update_wall_models(mudclient *mud) {
 }
 #endif
 
+
+#ifndef REVISION_177
+// SEND_SERVER_CONFIGS (19): the 90 per-world entries a custom world pushes right
+// after login; the SP/LAN server sends the same packet
+static void packet_handler_server_configs(mudclient *mud, int8_t *data,
+                                          int size) {
+    // 90 entries; positions 1,2,42,45,87,88 are newline-terminated strings, the rest single bytes
+    // walk them in order and capture the per-world flags
+    int off = 1; // skip the opcode byte
+    for (int pos = 1; pos <= 90 && off < size; pos++) {
+        if (pos == 1 || pos == 2 || pos == 42 || pos == 45 ||
+            pos == 87 || pos == 88) {
+            // position 1 is the world's display name, used for the welcome box title
+            if (pos == 1) {
+                int name_len = 0;
+                while (off + name_len < size &&
+                       get_unsigned_byte(data, off + name_len, size) !=
+                           10 &&
+                       name_len <
+                           (int)sizeof(mud->orsc.server_name) - 1) {
+                    mud->orsc.server_name[name_len] =
+                        (char)get_unsigned_byte(data, off + name_len,
+                                                size);
+                    name_len++;
+                }
+                mud->orsc.server_name[name_len] = '\0';
+            }
+            while (off < size && get_unsigned_byte(data, off, size) != 10) {
+                off++;
+            }
+            off++; // step past the newline terminator
+        } else {
+            int v = get_unsigned_byte(data, off++, size);
+            switch (pos) {
+            case 4:  mud->orsc.spawn_auction_npcs = v; break;
+            case 6:  mud->orsc.floating_nametags = v; break;
+            case 7:  mud->orsc.want_clans = v; break;
+            case 8:  mud->orsc.want_kill_feed = v; break;
+            case 12: mud->orsc.batch_progression = v; break;
+            case 13: mud->orsc.side_menu = v; break;
+            case 18: mud->orsc.experience_counter_toggle = v; break;
+            case 19: mud->orsc.experience_drops_toggle = v; break;
+            case 25: mud->orsc.want_skill_menus = v; break;
+            case 26: mud->orsc.want_quest_menus = v; break;
+            case 28: mud->orsc.want_keyboard_shortcuts = v; break;
+            case 32: mud->orsc.want_cert_deposit = v; break;
+            case 34: mud->orsc.want_drop_x = v; break;
+            case 35: mud->orsc.want_exp_info = v; break;
+            case 41: mud->orsc.want_fixed_overhead_chat = v; break;
+            case 67: mud->orsc.want_leftclick_webs = v; break;
+            case 27: mud->orsc.want_elixirs = v; break;
+            case 29: mud->orsc.want_custom_banks = v; break;
+            case 30: mud->orsc.want_bank_pins = v; break;
+            case 31: mud->orsc.want_bank_notes = v; break;
+            case 39: mud->orsc.want_custom_rank_display = v; break;
+            case 40: mud->orsc.right_click_bank = v; break;
+            case 51: mud->orsc.want_fatigue = v; break;
+            case 57: mud->orsc.want_quest_started_indicator = v; break;
+            case 52: mud->orsc.custom_sprites = v; break;
+            case 60: mud->orsc.want_runecraft = v; break;
+            case 61: mud->orsc.custom_landscape = v; break;
+            case 62: mud->orsc.want_equipment_tab = v; break;
+            case 63: mud->orsc.want_bank_presets = v; break;
+            case 64: mud->orsc.want_parties = v; break;
+            case 71: mud->orsc.character_creation_mode = v; break;
+            case 72: mud->orsc.skilling_exp_rate = v; break;
+            case 73: mud->orsc.want_harvesting = v; break;
+            case 76: mud->orsc.right_click_trade = v; break;
+            case 77: mud->orsc.features_sleep = v; break;
+            case 79: mud->orsc.want_cert_as_notes = v; break;
+            case 80: mud->orsc.want_openpk_points = v; break;
+            case 90: mud->orsc.want_nature_rune_protection = v; break;
+            default: break;
+            }
+        }
+    }
+
+    // resolve the config-dependent npc commands (shopOption/bankerOption token rows)
+    game_data_resolve_online_npc_commands(mud->orsc.right_click_trade,
+                                          mud->orsc.right_click_bank,
+                                          mud->orsc.spawn_auction_npcs);
+
+    // turn the custom landscape overlay on if config 61 says this world uses it
+    if (mud->world != NULL) {
+        mud->world->apply_custom_landscape = mud->orsc.custom_landscape;
+    }
+
+}
+#endif
 void mudclient_packet_tick(mudclient *mud) {
     uint64_t timestamp = get_ticks();
 
 #ifdef __vita__
-    // socket syscalls run only on the first packet tick of each rendered frame; catch-up ticks still parse packets
-    // already in the buffer
+    // socket syscalls run only on the first packet tick of each rendered frame;
+    // catch-up ticks still parse packets already in the buffer
     int do_io = !mud->gl_net_io_this_frame;
     mud->gl_net_io_this_frame = 1;
 
@@ -784,95 +878,23 @@ void mudclient_packet_tick(mudclient *mud) {
     // capture the translated opcode so utility.c's over-read warnings can name the packet
     rsc_debug_last_opcode = opcode;
 
-    // custom world reuses the canonical-204 opcode numbers for shared packets plus ~27 custom-only opcodes.
-    // SEND_SERVER_CONFIGS (19) is custom-only and pushed after login, so skip it here; the other custom-only opcodes fall through to the switch default
+    // custom world reuses the canonical-204 opcode numbers for shared packets plus ~27 custom-only opcodes
+    // SEND_SERVER_CONFIGS (19) is custom-only and pushed after login, so skip it here; the rest fall through to the switch default
     if (mud->packet_stream->protocol_custom && opcode == 19) {
-        // SEND_SERVER_CONFIGS: 90 entries pushed after login. 6 are newline-terminated strings (positions
-        // 1,2,42,45,87,88: name/welcome/logo + the two RSA-key strings), the rest single bytes; walk in order and capture the per-world flags
-        int off = 1; // skip the opcode byte
-        for (int pos = 1; pos <= 90 && off < size; pos++) {
-            if (pos == 1 || pos == 2 || pos == 42 || pos == 45 ||
-                pos == 87 || pos == 88) {
-                // position 1 is the world's display name, used for the welcome box title
-                if (pos == 1) {
-                    int name_len = 0;
-                    while (off + name_len < size &&
-                           get_unsigned_byte(data, off + name_len, size) !=
-                               10 &&
-                           name_len <
-                               (int)sizeof(mud->orsc.server_name) - 1) {
-                        mud->orsc.server_name[name_len] =
-                            (char)get_unsigned_byte(data, off + name_len,
-                                                    size);
-                        name_len++;
-                    }
-                    mud->orsc.server_name[name_len] = '\0';
-                }
-                while (off < size && get_unsigned_byte(data, off, size) != 10) {
-                    off++;
-                }
-                off++; // step past the newline terminator
-            } else {
-                int v = get_unsigned_byte(data, off++, size);
-                switch (pos) {
-                case 4:  mud->orsc.spawn_auction_npcs = v; break;
-                case 6:  mud->orsc.floating_nametags = v; break;
-                case 7:  mud->orsc.want_clans = v; break;
-                case 8:  mud->orsc.want_kill_feed = v; break;
-                case 12: mud->orsc.batch_progression = v; break;
-                case 13: mud->orsc.side_menu = v; break;
-                case 18: mud->orsc.experience_counter_toggle = v; break;
-                case 19: mud->orsc.experience_drops_toggle = v; break;
-                case 25: mud->orsc.want_skill_menus = v; break;
-                case 26: mud->orsc.want_quest_menus = v; break;
-                case 28: mud->orsc.want_keyboard_shortcuts = v; break;
-                case 32: mud->orsc.want_cert_deposit = v; break;
-                case 34: mud->orsc.want_drop_x = v; break;
-                case 35: mud->orsc.want_exp_info = v; break;
-                case 41: mud->orsc.want_fixed_overhead_chat = v; break;
-                case 67: mud->orsc.want_leftclick_webs = v; break;
-                case 27: mud->orsc.want_elixirs = v; break;
-                case 29: mud->orsc.want_custom_banks = v; break;
-                case 30: mud->orsc.want_bank_pins = v; break;
-                case 31: mud->orsc.want_bank_notes = v; break;
-                case 39: mud->orsc.want_custom_rank_display = v; break;
-                case 40: mud->orsc.right_click_bank = v; break;
-                case 51: mud->orsc.want_fatigue = v; break;
-                case 57: mud->orsc.want_quest_started_indicator = v; break;
-                case 52: mud->orsc.custom_sprites = v; break;
-                case 60: mud->orsc.want_runecraft = v; break;
-                case 61: mud->orsc.custom_landscape = v; break;
-                case 62: mud->orsc.want_equipment_tab = v; break;
-                case 63: mud->orsc.want_bank_presets = v; break;
-                case 64: mud->orsc.want_parties = v; break;
-                case 71: mud->orsc.character_creation_mode = v; break;
-                case 72: mud->orsc.skilling_exp_rate = v; break;
-                case 73: mud->orsc.want_harvesting = v; break;
-                case 76: mud->orsc.right_click_trade = v; break;
-                case 77: mud->orsc.features_sleep = v; break;
-                case 79: mud->orsc.want_cert_as_notes = v; break;
-                case 80: mud->orsc.want_openpk_points = v; break;
-                case 90: mud->orsc.want_nature_rune_protection = v; break;
-                default: break;
-                }
-            }
-        }
-
-        // resolve the config-dependent npc commands (shopOption/bankerOption token rows)
-        game_data_resolve_online_npc_commands(mud->orsc.right_click_trade,
-                                              mud->orsc.right_click_bank,
-                                              mud->orsc.spawn_auction_npcs);
-
-        // turn the custom landscape overlay on if config 61 says this world uses it
-        if (mud->world != NULL) {
-            mud->world->apply_custom_landscape = mud->orsc.custom_landscape;
-        }
-
+        packet_handler_server_configs(mud, data, size);
         return;
     }
 #endif
 
     switch (opcode) {
+#ifndef REVISION_177
+    case SERVER_SERVER_CONFIGS:
+        // the SP/LAN server pushes the same 90 entries as a custom world
+        if (MUD_SP_WIRE(mud)) {
+            packet_handler_server_configs(mud, data, size);
+        }
+        break;
+#endif
     case SERVER_WORLD_INFO:
         if (mud->local_player_server_index >= PLAYERS_SERVER_MAX) {
             return;
@@ -915,8 +937,8 @@ void mudclient_packet_tick(mudclient *mud) {
         int player_y = mud->local_region_y * MAGIC_LOC + 64;
 
         if (has_loaded_region) {
-            // hard-reset the walk only when client and server positions disagree; a prebuilt crossing keeps its
-            // rebased movement
+            // hard-reset the walk only when client and server positions disagree;
+            // a prebuilt crossing keeps its rebased movement
             int dx = mud->local_player->current_x - player_x;
             int dy = mud->local_player->current_y - player_y;
 
@@ -937,8 +959,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 mud->local_player->current_y =
                     mud->local_player->waypoints_y[0] = player_y;
 
-                // snap the camera anchor with the player on a hard reset so they move together; a prebuilt crossing
-                // skips this branch
+                // snap the camera anchor with the player on a hard reset so they
+                // move together; a prebuilt crossing skips this branch
                 mud->camera_auto_rotate_player_x = player_x;
                 mud->camera_auto_rotate_player_y = player_y;
             }
@@ -1028,8 +1050,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 return;
             }
 
-            // custom new-player record is a different shape: index 11, offX/offY 6 bits each, sprite 4, no is-known
-            // bit = 27 bits per player (authentic uses 5-bit offsets + an is-known bit = 26); sign-correct at 31/64
+            // custom new-player record is a different shape: index 11, offX/offY 6 bits each, sprite 4, no is-known bit = 27 bits
+            // authentic uses 5-bit offsets + an is-known bit = 26; sign-correct at 31/64
             int offset_bits = 5;
             int has_known_bit = 1;
 
@@ -1041,7 +1063,7 @@ void mudclient_packet_tick(mudclient *mud) {
 #endif
 
             int sign_limit = (1 << (offset_bits - 1)) - 1; // 15 or 31
-            int sign_span = 1 << offset_bits; // 32 or 64
+            int sign_span = 1 << offset_bits;              // 32 or 64
 
             int area_x = get_bit_mask(data, offset, size, offset_bits);
             offset += offset_bits;
@@ -1072,16 +1094,17 @@ void mudclient_packet_tick(mudclient *mud) {
 
             mudclient_add_player(mud, server_index, x, y, sprite);
 
-            // player_server_indexes[] is PLAYERS_MAX (500); clamp the store so a crowded region can't write past the
-            // array
+
+            // player_server_indexes[] is PLAYERS_MAX (500); clamp the store so a
+            // crowded region can't write past the array
             if (is_player_known == 0 && has_known_bit &&
                 player_count < PLAYERS_MAX) {
                 mud->player_server_indexes[player_count++] = server_index;
             }
         }
 
-        // opcode 163 (known-players request) is never sent on a custom world; custom pushes appearances unprompted
-        // via SEND_UPDATE_PLAYERS (234)
+        // opcode 163 (known-players request) is never sent on a custom world;
+        // custom pushes appearances unprompted via SEND_UPDATE_PLAYERS (234)
         int want_known_players = player_count > 0;
 
 #ifndef REVISION_177
@@ -1248,8 +1271,8 @@ void mudclient_packet_tick(mudclient *mud) {
                     int equipped_count = get_unsigned_byte(data, offset, size);
                     offset++;
 
-                    // consume all equipped_count bytes for framing but store only into animations[ANIMATION_COUNT]
-                    // (12); clamp so count > 12 can't overflow
+                    // consume all equipped_count bytes for framing but store only
+                    // into animations[ANIMATION_COUNT] (12); clamp so count > 12 can't overflow
                     for (int j = 0; j < equipped_count; j++) {
                         int anim = get_unsigned_byte(data, offset++, size);
                         if (j < ANIMATION_COUNT) {
@@ -1277,6 +1300,7 @@ void mudclient_packet_tick(mudclient *mud) {
 
                     player->skull_visible =
                         get_unsigned_byte(data, offset++, size);
+
                 } else {
                     offset += 14;
 
@@ -1312,7 +1336,8 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
     case SERVER_REGION_OBJECTS: {
-        // this packet mutates the scenery object set the bake worker reads; finish or drop any in-flight bake first
+        // this packet mutates the scenery object set the bake worker reads;
+        // finish or drop any in-flight bake first
 #if defined(RENDER_GL) && (defined(__vita__) || defined(__linux__))
         mudclient_gl_bake_cancel(mud);
 #endif
@@ -1381,8 +1406,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
                 if (mud->protocol_custom) {
-                    // custom SEND_SCENERY_HANDLER appends a per-object direction byte that authentic 203/204 doesn't
-                    // send; register it into the tile grid before the 60000 check
+                    // custom SEND_SCENERY_HANDLER appends a per-object direction byte that authentic 203/204 doesn't send
+                    // register it into the tile grid before the 60000 check
                     wire_direction = get_signed_byte(data, offset++, size);
                     world_set_tile_direction(mud->world, area_x, area_y,
                                              wire_direction);
@@ -1538,8 +1563,8 @@ void mudclient_packet_tick(mudclient *mud) {
         // re-bake and re-buffer only when the packet actually changed the object set
         if (objects_added > 0 || objects_removed > 0 ||
             mud->object_count != objects_before) {
-            // defer the scenery bake and terrain lighting refresh to the next draw_game so it runs once on the final
-            // object set
+            // defer the scenery bake and terrain lighting refresh to the next
+            // draw_game so it runs once on the final object set
             mud->gl_region_bake_pending = 1;
         }
 #elif defined(RENDER_3DS_GL)
@@ -1632,7 +1657,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 return;
             }
 
-            // custom new-NPC offsets are 6 bits (authentic 5), sign at 31/64; index (12) and npc id (10) don't vary
+            // custom new-NPC offsets are 6 bits (authentic 5), sign at 31/64;
+            // index (12) and npc id (10) don't vary
             int npc_offset_bits = 5;
 
 #ifndef REVISION_177
@@ -1935,7 +1961,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
                 mud->wall_object_count = count;
 
-                // boundary removal sentinel differs by protocol: authentic (204/177) = 65535, custom = 60000
+                // boundary removal sentinel differs by protocol: authentic
+                // (204/177) = 65535, custom = 60000
                 int wall_remove_id = 65535;
 #ifndef REVISION_177
                 if (mud->protocol_custom) {
@@ -1993,7 +2020,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 offset += 3;
 
 #ifndef REVISION_177
-                if (mud->protocol_custom && mud->orsc.want_bank_notes) {
+                if ((mud->protocol_custom || MUD_SP_WIRE(mud)) &&
+                    mud->orsc.want_bank_notes) {
                     // a noted byte trails even the out-of-range cull entry; read and discard it
                     offset++;
                 }
@@ -2034,7 +2062,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 int item_noted = 0;
 
 #ifndef REVISION_177
-                if (mud->protocol_custom && mud->orsc.want_bank_notes) {
+                if ((mud->protocol_custom || MUD_SP_WIRE(mud)) &&
+                    mud->orsc.want_bank_notes) {
                     item_noted = get_unsigned_byte(data, offset++, size) == 1;
                 }
 #endif
@@ -2117,12 +2146,15 @@ void mudclient_packet_tick(mudclient *mud) {
         char message[size];
 #ifndef REVISION_177
         if (mud->packet_stream->protocol_custom) {
-            // custom rich chat (SERVER_MESSAGE): i32 crown, u8 type, u8 flags, msg (newline-terminated); if flags&1
-            // the sender name is written twice, if flags&2 a colour string. render as "sender: msg"
+            // custom rich chat (SERVER_MESSAGE): i32 crown, u8 type, u8 flags, msg (newline-terminated)
+            // if flags&1 the sender name is written twice, if flags&2 a colour string; render as "sender: msg"
             // i32 crown: packed rank icon (high byte = crownIndex + 1, low 24 bits = recolour mask)
             int crown = (int)get_unsigned_int(data, 1, size);
             int off = 1 + 4;
-            // MessageType rsID: GAME 0, QUEST 3, CHAT 4, GLOBAL_CHAT 8, CLAN_CHAT 9
+            /* #28: their MessageType rsID (GAME 0, QUEST 3, CHAT 4,
+             * GLOBAL_CHAT 8, CLAN_CHAT 9). Was discarded, so a sender-less
+             * QUEST message routed to the plain server-message line instead of
+             * the quest line. */
             int msg_type = get_unsigned_byte(data, off++, size);
             int flags = get_unsigned_byte(data, off++, size);
             char msg[512] = {0};
@@ -2151,8 +2183,8 @@ void mudclient_packet_tick(mudclient *mud) {
             }
             // flags & 2 colour string is consumed but ignored for display
             if (sender[0] != '\0') {
-                // a sender means a CHAT/GLOBAL_CHAT/CLAN_CHAT type; route it to the chat tab with the crown before
-                // the name
+                // a sender means a CHAT/GLOBAL_CHAT/CLAN_CHAT type; route it to
+                // the chat tab with the crown before the name
                 snprintf(message, size, "%s: %s", sender, msg);
                 mud->orsc_pending_crown = crown;
                 mudclient_show_message(mud, message, MESSAGE_TYPE_CHAT);
@@ -2177,8 +2209,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom) {
             break;
         }
-        // custom fightmode sync (u8: 0=Controlled, 1=Aggressive, 2=Accurate, 3=Defensive); sets mud->combat_style,
-        // custom-only opcode
+        // custom fightmode sync (u8: 0=controlled, 1=aggressive, 2=accurate,
+        // 3=defensive); sets mud->combat_style, custom-only opcode
         mud->combat_style = get_unsigned_byte(data, 1, size);
         break;
     }
@@ -2186,8 +2218,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom) {
             break;
         }
-        // custom equipment tab: u8 equipmentCount, then per worn item { u8 wieldPos, u16 catalogId, i32 amount iff
-        // stackable }; amount is present only when > 0. store collapsed into the 11-slot paperdoll
+        // custom equipment tab: u8 equipmentCount, then per worn item { u8 wieldPos, u16 catalogId, i32 amount iff stackable }
+        // amount is present only when > 0; store collapsed into the 11-slot paperdoll
         for (int i = 0; i < 11; i++) {
             mud->equipped_item_id[i] = 0;
             mud->equipped_item_amount[i] = 0;
@@ -2207,8 +2239,8 @@ void mudclient_packet_tick(mudclient *mud) {
             }
             int slot = orsc_equip_collapse_slot(wield_pos);
             if (slot >= 0 && slot < 11) {
-                // the paperdoll indexes game_data.items[] by this id; clamp an out-of-range id so it can't read past
-                // the table
+                // the paperdoll indexes game_data.items[] by this id; clamp an
+                // out-of-range id so it can't read past the table
                 mud->equipped_item_id[slot] =
                     item_id >= 0 && item_id < game_data.item_count
                         ? item_id
@@ -2260,7 +2292,7 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
     case SERVER_ELIXIR: {
-        // opcode 54 is gated on config S_WANT_EXPERIENCE_ELIXIRS and dropped when off; both targets have it false
+        // opcode 54 is gated on config S_WANT_EXPERIENCE_ELIXIRS and dropped when off
         if (!mud->protocol_custom || !mud->orsc.want_elixirs) {
             break;
         }
@@ -2292,7 +2324,8 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
     case SERVER_BANK_PIN: {
-        if (!mud->protocol_custom) {
+        // the SP/co-op wire sends the same 135 payload for the bank PIN
+        if (!mud->protocol_custom && !MUD_SP_WIRE(mud)) {
             break;
         }
         // u8 isOpen: 1 = show the PIN pad, 0 = hide it; input resets on every transition
@@ -2323,11 +2356,12 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
     case SERVER_CLAN: {
-        if (!mud->protocol_custom) {
+        // the SP/co-op wire can send the same 112 payload if the server runs a clan plugin
+        if (!mud->protocol_custom && !MUD_SP_WIRE(mud)) {
             break;
         }
-        // opcode 112 multiplexes SEND_CLAN / SEND_CLAN_SETTINGS / SEND_CLAN_LIST; leading byte discriminates: 0 =
-        // roster snapshot, 1 = left/removed (clear), 2 = invite popup, 3 = settings, 4 = browse list
+        // opcode 112 multiplexes SEND_CLAN / SEND_CLAN_SETTINGS / SEND_CLAN_LIST; leading byte discriminates:
+        // 0 = roster snapshot, 1 = left/removed (clear), 2 = invite popup, 3 = settings, 4 = browse list
         size_t offset = 1;
 
         switch (get_unsigned_byte(data, offset++, size)) {
@@ -2401,8 +2435,8 @@ void mudclient_packet_tick(mudclient *mud) {
             }
             break;
         case 4: {
-            // clan browse list: u16 count x {clanID u16, name string, tag string, members u8, canJoin u8, clanPoints
-            // i32, clanRank u16}
+            // clan browse list: u16 count x {clanID u16, name string, tag string,
+            // members u8, canJoin u8, clanPoints i32, clanRank u16}
             int browse_count = get_unsigned_short(data, offset, size);
             offset += 2;
 
@@ -2448,8 +2482,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom && !MUD_SP_WIRE(mud)) {
             break;
         }
-        // u8 actionId: 0 = snapshot (leaderName, isLeader u8, partySize u8, then per member: name + 11 status bytes
-        // {rank, online, curHits, maxHits, cmbLvl, skulled, dead, shareLoot, total, inCombat, shareExp} + i64 shareExp2), 1 = left (clear), 2 = invite popup (inviter + party name)
+        // u8 actionId: 0 = snapshot (leaderName, isLeader u8, partySize u8, then per member: name + 11 status bytes + i64 shareExp2)
+        // 1 = left (clear), 2 = invite popup (inviter + party name)
         size_t offset = 1;
 
         switch (get_unsigned_byte(data, offset++, size)) {
@@ -2478,11 +2512,11 @@ void mudclient_packet_tick(mudclient *mud) {
                 int in_combat = get_unsigned_byte(data, offset + 9, size);
 
                 offset += 11; // rank..shareExp
-                offset += 8; // i64 shareExp2
+                offset += 8;  // i64 shareExp2
 
                 if (stored < ORSC_PARTY_MEMBERS_MAX) {
-                    // recent-damage flash: a member whose hp dropped since the previous snapshot flashes the HUD bar
-                    // for ~500 frames
+                    // recent-damage flash: a member whose hp dropped since the
+                    // previous snapshot flashes the HUD bar for ~500 frames
                     for (int prev = 0; prev < mud->orsc_party_size; prev++) {
                         if (strcmp(mud->orsc_party_member_names[prev],
                                    member_name) == 0) {
@@ -2547,6 +2581,35 @@ void mudclient_packet_tick(mudclient *mud) {
                     get_unsigned_byte(data, offset++, size);
             }
             break;
+        case 4: {
+            // SEND_PARTY_LIST: u16 total, then per party {partyId u16, size u8,
+            // allowsSearchedJoin u8, points i32, index u16}
+            int browse_count = get_unsigned_short(data, offset, size);
+            offset += 2;
+
+            int stored = 0;
+
+            for (int i = 0; i < browse_count && offset < size; i++) {
+                int party_id = get_unsigned_short(data, offset, size);
+                offset += 2;
+                int members = get_unsigned_byte(data, offset++, size);
+                int can_join = get_unsigned_byte(data, offset++, size);
+                int points = get_unsigned_int(data, offset, size);
+                offset += 4;
+                offset += 2; // list index
+
+                if (stored < ORSC_PARTY_BROWSE_MAX) {
+                    mud->orsc_party_browse_ids[stored] = party_id;
+                    mud->orsc_party_browse_members[stored] = members;
+                    mud->orsc_party_browse_can_join[stored] = can_join;
+                    mud->orsc_party_browse_points[stored] = points;
+                    stored++;
+                }
+            }
+
+            mud->orsc_party_browse_count = stored;
+            break;
+        }
         default:
             // case 4 (party browse list) unrendered; framing discards
             break;
@@ -2573,8 +2636,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom) {
             break;
         }
-        // reads one leading byte where the server writes two, matching the OpenRSC client (its fishingTrawlerUpdate
-        // reads a single byte, always sees interfaceId 6, matches no case, does nothing). generator writes interfaceId then actionId: 0 show, 1 variables {water u16, fish u16, minutes u8, netRipped u8}, 2 hide
+        // reads one leading byte where the server writes two, matching the OpenRSC client (fishingTrawlerUpdate reads one byte,
+        // always sees interfaceId 6, does nothing). generator writes interfaceId then actionId: 0 show, 1 variables, 2 hide
         size_t offset = 1;
 
         switch (get_unsigned_byte(data, offset++, size)) {
@@ -2600,8 +2663,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom) {
             break;
         }
-        // wire: 4 strings (arg0, replace, arg1, find) + a rename byte; replace/find default to arg0 when empty. on a
-        // rename, relocate the ignore entry from the old name to the new, keyed on base37 hashes
+        // wire: 4 strings (arg0, replace, arg1, find) + a rename byte; replace/find default to arg0 when empty
+        // on a rename, relocate the ignore entry from the old name to the new, keyed on base37 hashes
         size_t offset = 1;
         char arg0[MAX_USER_LENGTH + 1] = {0};
         char replace[MAX_USER_LENGTH + 1] = {0};
@@ -2641,8 +2704,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom || !mud->orsc.want_kill_feed) {
             break;
         }
-        // victim string, attacker string, killType i32 (killing weapon's item id; -1 ranged, -2 magic); queued
-        // newest-first, max 10
+        // victim string, attacker string, killType i32 (killing weapon's item id;
+        // -1 ranged, -2 magic); queued newest-first, max 10
         char victim[33] = {0};
         char attacker[33] = {0};
         size_t offset = 1;
@@ -2670,8 +2733,8 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom) {
             break;
         }
-        // u8 interfaceId, u8 actionId: 0 = set mode + restriction (2 more bytes), 1 = show the selection interface, 2
-        // = hide
+        // u8 interfaceId, u8 actionId: 0 = set mode + restriction (2 more bytes),
+        // 1 = show the selection interface, 2 = hide
         size_t offset = 1;
 
         offset++; // interfaceId
@@ -2741,11 +2804,12 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
     case SERVER_AUCTION: {
-        if (!mud->protocol_custom) {
+        // the SP/co-op wire can send the same 132 payload if the server runs an auction house
+        if (!mud->protocol_custom && !MUD_SP_WIRE(mud)) {
             break;
         }
-        // u8 packetType: 0 = reset the list, 1 = u16 count x {auctionID i32, itemID i32, amount i32, price i32,
-        // isMine u8 (1 = local player, no seller string; else seller string), hoursLeft u8}. type 1 appends, it is not a whole-list snapshot
+        // u8 packetType: 0 = reset the list, 1 = u16 count x {auctionID i32, itemID i32, amount i32, price i32, isMine u8, hoursLeft u8}
+        // isMine 1 = local player (no seller string), else seller string; type 1 appends, it is not a whole-list snapshot
         size_t offset = 1;
 
         switch (get_unsigned_byte(data, offset++, size)) {
@@ -2776,8 +2840,8 @@ void mudclient_packet_tick(mudclient *mud) {
                     orsc_read_string(data, &offset, size, seller,
                                      sizeof(seller));
                 } else {
-                    // the seller string is omitted from the wire for your own rows, so use the local player's
-                    // displayName
+                    // the seller string is omitted from the wire for your own
+                    // rows, so use the local player's displayName
                     snprintf(seller, sizeof(seller), "%s",
                              mud->local_player != NULL ? mud->local_player->name
                                                        : "");
@@ -2811,21 +2875,21 @@ void mudclient_packet_tick(mudclient *mud) {
         if (!mud->protocol_custom) {
             break;
         }
-        // six i32 counts (hairStyles, bodyTypes, skinColours, hairColours, topColours, bottomColours), then bit
-        // access: a hairStyles-wide mask, a bodyTypes-wide mask, then one bit per skin colour; only the skin bits are kept
+        // six i32 counts (hairStyles, bodyTypes, skinColours, hairColours, topColours, bottomColours), then bit access:
+        // a hairStyles-wide mask, a bodyTypes-wide mask, then one bit per skin colour; only the skin bits are kept
         size_t offset = 1;
 
         int unlocked_hair_styles = get_unsigned_int(data, offset, size);
         int unlocked_body_types = get_unsigned_int(data, offset + 4, size);
         int unlocked_skin_colours = get_unsigned_int(data, offset + 8, size);
-        // validate all six counts against the 256 cap and abort if any exceeds it; the trailing three are read and
-        // discarded
+        // validate all six counts against the 256 cap and abort if any exceeds
+        // it; the trailing three are read and discarded
         int unlocked_hair_colours = get_unsigned_int(data, offset + 12, size);
         int unlocked_top_colours = get_unsigned_int(data, offset + 16, size);
         int unlocked_bottom_colours = get_unsigned_int(data, offset + 20, size);
         offset += 24; // all six counts
 
-        // their sanity guard: anything past a byte means a newer client
+        // sanity guard: anything past a byte means a newer client
         if (unlocked_hair_styles > 256 || unlocked_body_types > 256 ||
             unlocked_skin_colours > 256 || unlocked_hair_colours > 256 ||
             unlocked_top_colours > 256 || unlocked_bottom_colours > 256) {
@@ -2835,7 +2899,7 @@ void mudclient_packet_tick(mudclient *mud) {
         // bit cursor over the remaining bytes
         size_t bit = offset * 8;
         bit += (size_t)unlocked_hair_styles; // skipped mask
-        bit += (size_t)unlocked_body_types; // skipped mask
+        bit += (size_t)unlocked_body_types;  // skipped mask
 
         for (int i = 0; i < unlocked_skin_colours; i++) {
             size_t byte_index = bit >> 3;
@@ -2871,8 +2935,8 @@ void mudclient_packet_tick(mudclient *mud) {
         for (int i = 0; i < mud->inventory_items_count; i++) {
 #ifndef REVISION_177
             if (mud->protocol_custom) {
-                // custom inventory, different layout from authentic-204: u16 catalogId (no packed equip bit), then
-                // separate u8 wielded and u8 noted, then i32 amount written only when amount > 0. stackable == 0 means "stacks" (config85 polarity)
+                // custom inventory, different layout from authentic-204: u16 catalogId (no packed equip bit), then separate u8
+                // wielded and u8 noted, then i32 amount written only when amount > 0. stackable == 0 means "stacks" (config85 polarity)
                 int id = get_unsigned_short(data, offset, size);
                 offset += 2;
 
@@ -2909,11 +2973,20 @@ void mudclient_packet_tick(mudclient *mud) {
             }
 
             int equipped = id_equip / 32768;
+            int noted = 0;
+
+#ifndef REVISION_177
+            // SP/LAN wire: a u8 noted follows the id when the world runs notes
+            if (MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes) {
+                noted = get_unsigned_byte(data, offset++, size) == 1;
+            }
+#endif
 
             mud->inventory_item_id[i] = id;
             mud->inventory_equipped[i] = equipped;
+            mud->inventory_item_noted[i] = noted;
 
-            if (game_data.items[id].stackable == 0) {
+            if (noted || game_data.items[id].stackable == 0) {
                 mud->inventory_item_stack_count[i] =
                     get_stack_int(data, offset, size);
 
@@ -2951,8 +3024,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom single-slot update packs the wield bit into the id (catalogID + (wielded ? 32768 : 0)), adds a
-            // u8 noted, and an i32 amount present only when > 0
+            // custom single-slot update packs the wield bit into the id (catalogID + (wielded ? 32768 : 0)),
+            // adds a u8 noted, and an i32 amount present only when > 0
             int noted = get_unsigned_byte(data, offset++, size);
 
             mud->inventory_item_noted[index] = noted;
@@ -2963,13 +3036,25 @@ void mudclient_packet_tick(mudclient *mud) {
             }
         } else
 #endif
-            if (game_data.items[id & 32767].stackable == 0) {
-            stack = get_stack_int(data, offset, size);
+        {
+            int noted = 0;
 
-            if (stack >= 128) {
-                offset += 4;
-            } else {
-                offset++;
+#ifndef REVISION_177
+            // SP/LAN wire: u8 noted after the id when the world runs notes
+            if (MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes) {
+                noted = get_unsigned_byte(data, offset++, size) == 1;
+            }
+#endif
+            mud->inventory_item_noted[index] = noted;
+
+            if (noted || game_data.items[id & 32767].stackable == 0) {
+                stack = get_stack_int(data, offset, size);
+
+                if (stack >= 128) {
+                    offset += 4;
+                } else {
+                    offset++;
+                }
             }
         }
 
@@ -2998,8 +3083,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
             mud->inventory_equipped[i] = mud->inventory_equipped[i + 1];
 
-            // the noted flag is a parallel array; it must shift with the id/count/equipped or items below a removed
-            // slot inherit a stale flag
+            // the noted flag is a parallel array; it must shift with the
+            // id/count/equipped or items below a removed slot inherit a stale flag
             mud->inventory_item_noted[i] = mud->inventory_item_noted[i + 1];
         }
         break;
@@ -3007,8 +3092,8 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_PLAYER_STAT_LIST: {
         int offset = 1;
 
-        // packet layout: opcode + N(current) + N(base) + N*4(experience) + 1(questPoints). N is not sent; derive it
-        // as (payload-1)/6 where payload = size-1. 18 = authentic, 19 = OpenRSC custom (+Runecraft); clamp to array capacity
+        // packet layout: opcode + N(current) + N(base) + N*4(experience) + 1(questPoints); N is derived as (payload-1)/6
+        // 18 = authentic, 19 = OpenRSC custom (+Runecraft); clamp to array capacity
         int derived = (size - 1) / 6;
 
         if (derived < 0) {
@@ -3046,8 +3131,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom SEND_EQUIPMENT_STATS repeats all five bonuses as i32 after the bytes; the ints overwrite the
-            // bytes and are authoritative (the byte copy saturates at 255 and can't go negative)
+            // custom SEND_EQUIPMENT_STATS repeats all five bonuses as i32 after the bytes; the ints overwrite the bytes and are
+            // authoritative (the byte copy saturates at 255 and can't go negative)
             for (int i = 0; i < PLAYER_STAT_EQUIPMENT_COUNT; i++) {
                 mud->player_stat_equipment[i] =
                     get_unsigned_int(data, 1 + PLAYER_STAT_EQUIPMENT_COUNT +
@@ -3112,8 +3197,8 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_PLAYER_STAT_FATIGUE: {
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom SEND_FATIGUE writes two shorts where authentic writes one: first fatigue/(MAX/100) as a 0-100
-            // percentage, then fatigue/(MAX/750); take the second since stat_fatigue is in 750ths
+            // custom SEND_FATIGUE writes two shorts where authentic writes one: first fatigue/(MAX/100) as a 0-100 percentage,
+            // then fatigue/(MAX/750); take the second since stat_fatigue is in 750ths
             mud->stat_fatigue = get_unsigned_short(data, 3, size);
             break;
         }
@@ -3124,8 +3209,8 @@ void mudclient_packet_tick(mudclient *mud) {
     }
 #ifndef REVISION_177
     case SERVER_BANK_PRESET: {
-        // custom SEND_BANK_PRESET (150): stored loadout of one preset slot. layout: u16 slotIndex; 30 inventory
-        // entries, each u8 0xFF (skip) or u16 catalogID + u8 noted + [i32 amount iff stackable||noted]; 14 equipment entries, each u8 0xFF or u16 catalogID + [i32 amount iff stackable] (no noted byte). the 14 wire slots collapse onto 11: 5->0, 6->1, 7->2, >7 -= 3
+        // custom SEND_BANK_PRESET (150): one preset slot. u16 slotIndex; 30 inventory entries (u8 0xFF skip, or u16 id + u8 noted + [i32 amount iff stackable||noted])
+        // 14 equipment entries (u8 0xFF, or u16 id + [i32 amount iff stackable], no noted byte); 14 wire slots collapse onto 11: 5->0, 6->1, 7->2, >7 -= 3
         if (!mud->protocol_custom) {
             break;
         }
@@ -3204,8 +3289,8 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_PLAYER_QUEST_LIST: {
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom SEND_QUESTS: u8 updateType. type 0 (full list): u8 count, then per quest i32 id, i32 stage,
-            // String name. type 1 (one quest): i32 id, i32 stage. quests are server-named and server-numbered; stage: < 0 complete, > 0 started, 0 not started
+            // custom SEND_QUESTS: u8 updateType. type 0 (full list): u8 count, then per quest i32 id, i32 stage, String name
+            // type 1 (one quest): i32 id, i32 stage. server-named/numbered; stage: < 0 complete, > 0 started, 0 not started
             size_t offset = 1;
             int update_type = get_unsigned_byte(data, offset++, size);
 
@@ -3258,8 +3343,7 @@ void mudclient_packet_tick(mudclient *mud) {
 #endif
 
         // packet carries only the server's quest count, but quests_length includes
-        // the 2 client-appended custom quests -- reading all of them over-read 1-2
-        // bytes past the packet; clamp to what the packet holds (extras stay default)
+        // the 2 client-appended custom quests; clamp to what the packet holds
         int quests_sent = size - 1;
         if (quests_sent > quests_length) {
             quests_sent = quests_length;
@@ -3337,7 +3421,7 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
 #ifndef REVISION_177
-    // custom-only SEND_PM (87): the server's echo of a PM the local player just sent; a rejected send echoes nothing.
+    // custom-only SEND_PM (87): the server's echo of a PM the local player just sent; a rejected send echoes nothing
     // payload: recipient name string, then the body via writeRSCString
     case 87: {
         if (!mud->protocol_custom) {
@@ -3361,7 +3445,7 @@ void mudclient_packet_tick(mudclient *mud) {
 
         char formatted_message[MAX_USER_LENGTH + sizeof(message) + 32];
 
-        // OpenRSC StringUtil PRIVATE_SEND format; a send to the global friend comes back addressed to "Global$"
+        // StringUtil PRIVATE_SEND format; a send to the global friend comes back addressed to "Global$"
         int is_global = (strncasecmp(to_username, "global$", 7) == 0);
 
         if (is_global) {
@@ -3379,7 +3463,7 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_FRIEND_MESSAGE: {
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom: String playerName, String formerName, i32 iconSprite, then message body via writeRSCString.
+            // custom: String playerName, String formerName, i32 iconSprite, then message body via writeRSCString
             // authentic: long hash, i32 totalSentMessages, RSC-compressed body
             size_t offset = 1;
 
@@ -3395,7 +3479,7 @@ void mudclient_packet_tick(mudclient *mud) {
             int crown = get_unsigned_int(data, offset, size);
             offset += 4;
 
-            // writeRSCString: smart CHARACTER count, then Huffman bytes
+            // writeRSCString: smart character count, then Huffman bytes
             int body_offset = (int)offset;
             int char_count = orsc_smart_length_get(data, size, &body_offset);
 
@@ -3407,8 +3491,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
             char formatted_message[MAX_USER_LENGTH + sizeof(message) + 32];
 
-            // 39: OpenRSC StringUtil PRIVATE_RECIEVE format. a global-chat message arrives as a PM whose sender is
-            // "Global$<name>"; strip the 7-char prefix and say "tells [everyone]"
+            // StringUtil PRIVATE_RECIEVE format. a global-chat message arrives as
+            // a PM whose sender is "Global$<name>"; strip the 7-char prefix and say "tells [everyone]"
             int is_global = (strncasecmp(from_username, "global$", 7) == 0);
 
             if (is_global) {
@@ -3457,8 +3541,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom writes four strings per entry, not one base37 long: name, name, formerName, formerName. only the
-            // first of each pair is meaningful, consume the duplicates. names fold to base37
+            // custom writes four strings per entry, not one base37 long: name, name, formerName, formerName
+            // only the first of each pair is meaningful, consume the duplicates; names fold to base37
             size_t offset = 2;
 
             for (int i = 0; i < mud->ignore_list_count; i++) {
@@ -3496,8 +3580,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom writeString()s the sound name (\n-terminated); authentic writeNonTerminatedString()s it, ended
-            // by the packet boundary
+            // custom writeString()s the sound name (\n-terminated); authentic
+            // writeNonTerminatedString()s it, ended by the packet boundary
             size_t offset = 1;
 
             orsc_read_string(data, &offset, (size_t)size, sound_name, size + 1);
@@ -3524,8 +3608,23 @@ void mudclient_packet_tick(mudclient *mud) {
         memset(mud->input_text_current, '\0', INPUT_TEXT_LENGTH + 1);
         memset(mud->input_text_final, '\0', INPUT_TEXT_LENGTH + 1);
 
-        surface_read_sleep_word(mud->surface, mud->sprite_texture + 1, data);
         mud->sleeping_status_text = NULL;
+
+        // custom worlds send the captcha as a PNG file, not the authentic
+        // run-length rows; decode by the PNG signature
+        if (size > 9 && (uint8_t)data[1] == 0x89 && data[2] == 'P' &&
+            data[3] == 'N' && data[4] == 'G') {
+            if (!surface_read_sleep_png(mud->surface, mud->sprite_texture + 1,
+                                        data + 1, size - 1)) {
+                mud_error("sleep: could not decode the PNG captcha (%d bytes)\n",
+                          size - 1);
+                // the "tap here to get a different one" link still works
+                mud->sleeping_status_text = "Can't show the word - get another";
+            }
+        } else {
+            surface_read_sleep_word(mud->surface, mud->sprite_texture + 1,
+                                    data);
+        }
         break;
     }
     case SERVER_SLEEP_CLOSE: {
@@ -3539,8 +3638,8 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_PLAYER_STAT_FATIGUE_ASLEEP: {
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // 27: same two-short fork as SERVER_PLAYER_STAT_FATIGUE (114): custom writes a 0-100 percentage short
-            // then the 750-scale short. fatigue_sleeping is on the 750 scale, take the second short
+            // same two-short fork as SERVER_PLAYER_STAT_FATIGUE (114): custom writes a 0-100 percentage short then the 750-scale short
+            // fatigue_sleeping is on the 750 scale, take the second short
             mud->fatigue_sleeping = get_unsigned_short(data, 3, size);
             break;
         }
@@ -3551,8 +3650,8 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_OPTION_LIST: {
         int count = get_unsigned_byte(data, 1, size);
 
-        // clamp count as an index into option_menu_entry; the custom protocol sends more than 5 entries (crafting 6,
-        // MagicalPoolCustom 13)
+        // clamp count as an index into option_menu_entry; the custom protocol
+        // sends more than 5 entries (crafting 6, MagicalPoolCustom 13)
         if (count > OPTION_MENU_MAX) {
             count = OPTION_MENU_MAX;
         }
@@ -3564,8 +3663,7 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom writes each option as a \n-terminated string; authentic length-prefixes it (u8 len +
-            // non-terminated text)
+            // custom writes each option as a \n-terminated string; authentic length-prefixes it (u8 len + non-terminated text)
             size_t entry_offset = (size_t)offset;
 
             for (int i = 0; i < count; i++) {
@@ -3603,8 +3701,8 @@ void mudclient_packet_tick(mudclient *mud) {
         mud->welcome_last_ip = get_unsigned_int(data, 9, size);
 #else
         if (mud->protocol_custom) {
-            // custom: String lastIp, u16 daysSinceLogin, u16 daysUntilRecovery activation (14 - daysSinceChange, or
-            // 0). no unread-messages field. authentic packs the IP as 4 raw bytes and the recovery figure as a 200/201-sentinel byte
+            // custom: String lastIp, u16 daysSinceLogin, u16 daysUntilRecovery activation (14 - daysSinceChange, or 0); no unread field
+            // authentic packs the IP as 4 raw bytes and the recovery figure as a 200/201-sentinel byte
             size_t offset = 1;
             char ip[46] = {0};
 
@@ -3621,8 +3719,8 @@ void mudclient_packet_tick(mudclient *mud) {
             free(mud->welcome_last_ip_string);
             mud->welcome_last_ip_string = strdup(ip);
 
-            // ui/welcome.c gates the "from:" line on welcome_last_ip != 0. custom IP arrives already formatted (can
-            // be IPv6), so pass the string and use the int only as a non-zero marker
+            // ui/welcome.c gates the "from:" line on welcome_last_ip != 0; custom
+            // IP arrives already formatted (can be IPv6), so pass the string and use the int only as a non-zero marker
             mud->welcome_last_ip = ip[0] != '\0' ? 1 : 0;
 
             mud->show_dialog_welcome = 1;
@@ -3657,8 +3755,8 @@ void mudclient_packet_tick(mudclient *mud) {
             memcpy(mud->server_message, (char *)data + 1, size - 1);
             mud->server_message[size - 1] = '\0';
 #ifndef REVISION_177
-            // 29: custom SEND_BOX/SEND_BOX2 build the body with writeString, appending a trailing 0x0A: strip it.
-            // authentic has no terminator, so gated on custom
+            // custom SEND_BOX/SEND_BOX2 build the body with writeString, appending
+            // a trailing 0x0A: strip it. authentic has no terminator, so gated on custom
             if (mud->protocol_custom && size >= 2 &&
                 mud->server_message[size - 2] == '\n') {
                 mud->server_message[size - 2] = '\0';
@@ -3678,7 +3776,8 @@ void mudclient_packet_tick(mudclient *mud) {
             mud->show_right_click_menu = 0;
         }
 
-        // bank renumbered under a held reorder pick: drop it rather than commit against the old slot numbering
+        // bank renumbered under a held reorder pick: drop it rather than commit
+        // against the old slot numbering
         mud->bank_organize_slot = -1;
 
         // TODO toggle
@@ -3690,8 +3789,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // OpenRSC custom (10010) bank: a different layout from authentic-204. the two counts are u16 and every
-            // entry carries a plain i32 amount with no stackable test. rows past BANK_ITEMS_MAX are parsed and dropped, not skipped, so the offset stays aligned
+            // custom bank: different layout from authentic-204. the two counts are u16 and every entry carries a plain i32 amount
+            // rows past BANK_ITEMS_MAX are parsed and dropped, not skipped, so the offset stays aligned
             int stored_size = get_unsigned_short(data, offset, size);
             offset += 2;
 
@@ -3712,8 +3811,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 offset += 4;
 
                 if (stored < BANK_ITEMS_MAX) {
-                    // bank grid indexes game_data.items[] by this id for the sprite/name; clamp an out-of-range wire
-                    // id like the inventory handler
+                    // the bank grid indexes game_data.items[] by this id; clamp an
+                    // out-of-range id like the inventory handler
                     mud->new_bank_items[stored] =
                         bank_id < game_data.item_count ? bank_id : IRON_MACE_ID;
                     mud->new_bank_items_count[stored] = bank_amount;
@@ -3775,7 +3874,7 @@ void mudclient_packet_tick(mudclient *mud) {
         break;
     }
     case SERVER_BANK_UPDATE: {
-        // a slot changed under a held reorder pick. a withdraw shifts every slot above it down by one
+        // a slot changed under a held reorder pick; a withdraw shifts every slot above it down by one
         mud->bank_organize_slot = -1;
 
         int offset = 1;
@@ -3787,8 +3886,7 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom: a plain i32 amount, never the variable stack-int (SEND_BANK_UPDATE: u8 slot, u16 catalogID, i32
-            // amount)
+            // custom: a plain i32 amount, never the variable stack-int (SEND_BANK_UPDATE: u8 slot, u16 catalogID, i32 amount)
             item_count = get_unsigned_int(data, offset, size);
             offset += 4;
         } else {
@@ -3845,8 +3943,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom SEND_SHOP_OPEN diverges from authentic twice: one extra header byte, stockSensitivity; and the
-            // per-item third field is a raw u16 baseAmount rather than authentic's signed byte holding a precomputed (baseAmount - amount) delta
+            // custom SEND_SHOP_OPEN diverges from authentic twice: one extra header byte, stockSensitivity; and the per-item third
+            // field is a raw u16 baseAmount rather than authentic's signed byte holding a precomputed (baseAmount - amount) delta
             stock_sensitivity = get_unsigned_byte(data, offset++, size);
         }
 #endif
@@ -3869,8 +3967,8 @@ void mudclient_packet_tick(mudclient *mud) {
                 int base_amount = get_unsigned_short(data, offset, size);
                 offset += 2;
 
-                // fold the custom cost formula into authentic units: delta = clamp(stockSensitivity * (baseAmount -
-                // amount), -100, 100), cost = basePrice * max(priceMod + delta, 10) / 100. store the folded delta so ui/shop.c stays identical across protocols
+                // fold the custom cost formula into authentic units: delta = clamp(stockSensitivity * (baseAmount - amount), -100, 100),
+                // cost = basePrice * max(priceMod + delta, 10) / 100. store the folded delta so ui/shop.c stays identical across protocols
                 int delta =
                     stock_sensitivity * (base_amount - mud->shop_items_count[i]);
 
@@ -3981,8 +4079,8 @@ void mudclient_packet_tick(mudclient *mud) {
     case SERVER_DUEL_ITEMS: {
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom SEND_TRADE_OTHER_ITEMS / SEND_DUEL_OPPONENTS_ITEMS differ from authentic twice: a per-item noted
-            // byte sits between the id and the amount, present only when the world accepts notes; and TRADE (not duel) echoes your own offer as a second list after the opponent's
+            // custom SEND_TRADE_OTHER_ITEMS / SEND_DUEL_OPPONENTS_ITEMS differ from authentic twice: a per-item noted byte sits
+            // between the id and the amount, present only when the world accepts notes; and TRADE echoes your own offer as a second list
             int offset = 1;
             int notes = mud->orsc.want_bank_notes;
 
@@ -4020,6 +4118,16 @@ void mudclient_packet_tick(mudclient *mud) {
                 get_unsigned_short(data, offset, size);
 
             offset += 2;
+
+#ifndef REVISION_177
+            // SP/LAN wire: u8 noted between id and amount when the world runs notes
+            mud->transaction_recipient_items_noted[i] = 0;
+
+            if (MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes) {
+                mud->transaction_recipient_items_noted[i] =
+                    get_unsigned_byte(data, offset++, size) == 1;
+            }
+#endif
 
             mud->transaction_recipient_items_count[i] =
                 get_unsigned_int(data, offset, size);
@@ -4059,8 +4167,8 @@ void mudclient_packet_tick(mudclient *mud) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom SEND_TRADE_OPEN_CONFIRM / SEND_DUEL_CONFIRMWINDOW diverge from authentic twice: the opponent's
-            // name is a \n-terminated string (writeString) rather than an 8-byte base37 hash (writeLong); and both item lists carry the per-item noted byte. the duel's 4 trailing option bytes are identical in both and ignored here
+            // custom SEND_TRADE_OPEN_CONFIRM / SEND_DUEL_CONFIRMWINDOW diverge from authentic twice: the opponent's name is a
+            // \n-terminated string rather than an 8-byte base37 hash; and both item lists carry the per-item noted byte
             size_t name_offset = (size_t)offset;
 
             orsc_read_string(
@@ -4110,6 +4218,15 @@ void mudclient_packet_tick(mudclient *mud) {
 
             offset += 2;
 
+#ifndef REVISION_177
+            mud->transaction_recipient_confirm_items_noted[i] = 0;
+
+            if (MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes) {
+                mud->transaction_recipient_confirm_items_noted[i] =
+                    get_unsigned_byte(data, offset++, size) == 1;
+            }
+#endif
+
             mud->transaction_recipient_confirm_items_count[i] =
                 get_unsigned_int(data, offset, size);
 
@@ -4127,6 +4244,15 @@ void mudclient_packet_tick(mudclient *mud) {
                 get_unsigned_short(data, offset, size);
 
             offset += 2;
+
+#ifndef REVISION_177
+            mud->transaction_confirm_items_noted[i] = 0;
+
+            if (MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes) {
+                mud->transaction_confirm_items_noted[i] =
+                    get_unsigned_byte(data, offset++, size) == 1;
+            }
+#endif
 
             mud->transaction_confirm_items_count[i] =
                 get_unsigned_int(data, offset, size);
@@ -4198,8 +4324,8 @@ void mudclient_packet_tick(mudclient *mud) {
         mud->settings_sound_disabled = get_unsigned_byte(data, 3, size);
 
 #ifndef REVISION_177
-        // custom worlds append 34 more bytes to these 3, read sequentially. take the one rendered and ignore the
-        // rest. nametag = customOptions[22] = payload byte 25 (getCombatStyle is customOptions[0] at payload byte 3, 3 + 22 = 25)
+        // custom worlds append 34 more bytes to these 3, read sequentially. take the one rendered and ignore the rest
+        // nametag = customOptions[22] = payload byte 25 (getCombatStyle is customOptions[0] at payload byte 3, 3 + 22 = 25)
         if (mud->protocol_custom && size > 26) {
             // per-player show flags; default show if the packet is short
             mud->orsc_show_side_menu = get_unsigned_byte(data, 21, size) == 1;
@@ -4207,7 +4333,8 @@ void mudclient_packet_tick(mudclient *mud) {
             mud->orsc_name_clan_tag_overlay =
                 get_unsigned_byte(data, 26, size) == 1;
 
-            // the two kill-counter HUD lines (payload bytes 29 and 35), each its own account opt-in defaulting off
+            // the two kill-counter HUD lines (payload bytes 29 and 35), each its
+            // own account opt-in defaulting off
             if (size > 35) {
                 mud->orsc_show_npc_kc = get_unsigned_byte(data, 29, size) == 1;
                 mud->orsc_show_recent_npc_kc =

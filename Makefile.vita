@@ -1,13 +1,16 @@
-# PlayStation Vita target, software renderer + SDL2
+# PlayStation Vita target (software renderer + SDL2)
 #
 # Build:  ./build-vita.sh
 # Output: rsc-c-vita.vpk
 #
 # Requires VitaSDK (https://vitasdk.org) with the SDL2 package: vdpm sdl2
+#
+# the VitaSDK compiler predefines __vita__, so the port's #ifdef __vita__ blocks
+# activate on their own
 
 TARGET     := rsc-c-vita
 TITLE_ID   := RSCC00001
-TITLE_NAME := RuneScape
+TITLE_NAME := RSC-C
 
 ifeq ($(strip $(VITASDK)),)
 $(error VITASDK is not set. Install VitaSDK and run build-vita.sh, or: export VITASDK=/usr/local/vitasdk)
@@ -17,19 +20,19 @@ PREFIX  := arm-vita-eabi
 CC      := $(PREFIX)-gcc
 PKGCONF := $(PREFIX)-pkg-config
 
-# same source set as the desktop software build, bundled tiny RSA (no openssl)
+# same source set as the desktop software build; bundled tiny RSA, no OpenSSL
 SRC := $(wildcard src/*.c src/lib/*.c src/lib/rsa/*.c src/ui/*.c src/custom/*.c)
 OBJ := $(SRC:.c=.o)
 
-# single player embeds the offline rsc-server inside quickjs
+# single-player embeds the offline rsc-server inside QuickJS
 # SINGLEPLAYER=0 builds a multiplayer-only client
 SINGLEPLAYER ?= 1
 ifeq ($(SINGLEPLAYER),1)
 QJS_SRC    := $(wildcard src/quickjs/*.c)
 QJS_OBJ    := $(QJS_SRC:.c=.o)
 SP_CFLAGS  := -DWITH_SINGLEPLAYER -D_GNU_SOURCE -Isrc/quickjs
-# quickjs needs c11 and true ieee floats, no -ffast-math
-# -DNDEBUG matches the release CFLAGS, see Makefile.vita.gl
+# QuickJS needs C11 + true IEEE floats (no -ffast-math); -w silences its warnings;
+# -DNDEBUG disables the JS_FreeRuntime leak-check abort
 QJS_CFLAGS := -std=gnu11 -fwrapv -O2 -DNDEBUG -D_GNU_SOURCE -Isrc/quickjs -w
 SP_LIBS    := -lpthread
 SP_VPK_ADD := --add sp/sp-bootstrap.js=sp/sp-bootstrap.js \
@@ -38,7 +41,7 @@ SP_VPK_ADD := --add sp/sp-bootstrap.js=sp/sp-bootstrap.js \
               --add sp/landscape.cache=sp/landscape.cache
 endif
 
-# NDEBUG: asserts off, packet over-read guards recover instead of aborting
+# -DNDEBUG: asserts off, so packet over-read guards recover instead of aborting
 CFLAGS  := -std=gnu99 -fwrapv -O2 -ffast-math -Wall -DNDEBUG \
            -DSDL2 -DRENDER_SW $(SP_CFLAGS) $(shell $(PKGCONF) --cflags sdl2)
 
@@ -46,17 +49,17 @@ CFLAGS  := -std=gnu99 -fwrapv -O2 -ffast-math -Wall -DNDEBUG \
 # --undefined keeps the _newlib_heap_size_user override from being stripped
 LDFLAGS := -Wl,-q -Wl,--undefined=_newlib_heap_size_user
 
-# extra system stubs for net init and the dns resolver
+# extra system stubs for net init and the DNS resolver
 LIBS    := $(shell $(PKGCONF) --libs sdl2) \
            -lSceNet_stub -lSceNetCtl_stub -lSceSysmodule_stub \
            -lSceCommonDialog_stub -lm $(SP_LIBS)
 
-# bundle cache/ into the vpk at app0:/cache/
+# bundle cache/ into the .vpk at app0:/cache/
 CACHE_FILES := $(shell find cache -type f)
 VPK_ADD     := $(foreach f,$(CACHE_FILES),--add $(f)=$(f))
 VPK_ADD     += $(SP_VPK_ADD)
 
-# optional livearea / icon assets
+# optional LiveArea / icon assets
 ifneq ($(wildcard sce_sys/icon0.png),)
 VPK_ADD += --add sce_sys/icon0.png=sce_sys/icon0.png
 endif
@@ -86,7 +89,7 @@ $(TARGET).elf: $(OBJ) $(QJS_OBJ)
 src/quickjs/%.o: src/quickjs/%.c
 	$(CC) $(QJS_CFLAGS) -c $< -o $@
 
-# c11 atomics for the single-player lock-free rings
+# C11 atomics for the single-player lock-free rings
 src/mudclient-singleplayer.o: src/mudclient-singleplayer.c
 	$(CC) $(CFLAGS) -std=gnu11 -c $< -o $@
 

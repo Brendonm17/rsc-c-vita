@@ -463,8 +463,6 @@ static void mudclient_start_application_common(struct mudclient *mud) {
         exit(1);
     }
 #endif
-    printf("INFO: Loaded OpenGL version %d.%d\n", GLVersion.major,
-           GLVersion.minor);
 #elif !defined(ANDROID) && !defined(__vita__)
     glewExperimental = GL_TRUE;
 
@@ -1143,7 +1141,6 @@ int8_t *mudclient_read_data_file(mudclient *mud, char *file, char *description,
 #endif
 
 #ifndef ANDROID
-    printf("INFO: Loading %s\n", prefixed_file);
     FILE *archive_stream = fopen(prefixed_file, "rb");
 #endif
 
@@ -1164,7 +1161,6 @@ int8_t *mudclient_read_data_file(mudclient *mud, char *file, char *description,
                      xdg_home, file);
         }
 
-        printf("INFO: Loading %s\n", prefixed_file);
         archive_stream = fopen(prefixed_file, "rb");
 
         /* XDG failed, now try the global prefix... */
@@ -1172,7 +1168,6 @@ int8_t *mudclient_read_data_file(mudclient *mud, char *file, char *description,
             snprintf(prefixed_file, sizeof(prefixed_file), "%s/%s", MUD_DATADIR,
                      file);
 
-            printf("INFO: Loading %s\n", prefixed_file);
             archive_stream = fopen(prefixed_file, "rb");
         }
     }
@@ -2349,10 +2344,7 @@ void mudclient_login(mudclient *mud, char *username, char *password,
         password = (char *)"rscsp";
     }
 
-    /* Online connect: free any leftover ad-hoc radio so Wi-Fi infra is back before
-     * the connectivity probe. Normally already down (leaving a world frees it);
-     * still needed if the user toggled ad-hoc browse then picked online directly.
-     * Skipped for the SP host / co-op guest (MUD_SP_WIRE), which keep their network. */
+    // online connect: free any leftover ad-hoc radio so Wi-Fi is back before the probe; skipped for SP/co-op
     if (!MUD_SP_WIRE(mud)) {
         spnet_shutdown();
     }
@@ -2513,13 +2505,13 @@ void mudclient_login(mudclient *mud, char *username, char *password,
         // big-endian ints, then a ClientLimitations trailer; loginEncryptionVersion 0 = plaintext password, no ISAAC; 2-byte custom framing from packet_stream
         packet_stream_new_packet(mud->packet_stream, CLIENT_LOGIN); // wire op 0
         packet_stream_put_byte(mud->packet_stream, reconnecting ? 1 : 0);
-        packet_stream_put_int(mud->packet_stream, 10010); // clientVersion
+        packet_stream_put_int(mud->packet_stream, 10010);  // clientVersion
         packet_stream_put_string(mud->packet_stream, formatted_username);
         packet_stream_put_byte(mud->packet_stream, '\n');
-        packet_stream_put_byte(mud->packet_stream, 0); // loginEncryptionVersion=0
+        packet_stream_put_byte(mud->packet_stream, 0);     // loginEncryptionVersion=0
         packet_stream_put_string(mud->packet_stream, formatted_password);
         packet_stream_put_byte(mud->packet_stream, '\n');
-        packet_stream_put_long(mud->packet_stream, 0); // uid (random, ignored)
+        packet_stream_put_long(mud->packet_stream, 0);     // uid (random, ignored)
         // ClientLimitations trailer: each field declares what this client can render; the server substitutes or hides
         // anything beyond. values mirror OpenRSC tellLimitations() = count-1 (max index) except where noted; field order per LoginPacketHandler
         packet_stream_put_short(mud->packet_stream,
@@ -2527,46 +2519,46 @@ void mudclient_login(mudclient *mud, char *username, char *password,
         // items/npcs: declare the OpenRSC id range the custom overlay grows these tables to, not the pre-overlay
         // count
         packet_stream_put_int(mud->packet_stream, online_item_max_id); // maxItemId
-        packet_stream_put_int(mud->packet_stream, online_npc_max_id); // maxNpcId
+        packet_stream_put_int(mud->packet_stream, online_npc_max_id);  // maxNpcId
         packet_stream_put_int(mud->packet_stream,
-                              game_data.object_count - 1); // maxSceneryId
+                              game_data.object_count - 1);      // maxSceneryId
         packet_stream_put_short(mud->packet_stream,
-                                game_data.prayer_count - 1); // maxPrayerId
+                                game_data.prayer_count - 1);    // maxPrayerId
         packet_stream_put_short(mud->packet_stream,
-                                game_data.spell_count - 1); // maxSpellId
+                                game_data.spell_count - 1);     // maxSpellId
         // stat arrays are PLAYER_SKILL_MAX wide; the parser clamps the server's real count into them
         packet_stream_put_byte(mud->packet_stream,
-                               PLAYER_SKILL_MAX - 1); // maxSkillId (ubyte)
+                               PLAYER_SKILL_MAX - 1);           // maxSkillId (ubyte)
         packet_stream_put_short(mud->packet_stream,
-                                game_data.roof_count - 1); // maxRoofId
+                                game_data.roof_count - 1);      // maxRoofId
         packet_stream_put_short(mud->packet_stream,
-                                game_data.texture_count - 1); // maxTextureId
+                                game_data.texture_count - 1);   // maxTextureId
         packet_stream_put_short(mud->packet_stream,
-                                game_data.tile_count - 1); // maxTileId
+                                game_data.tile_count - 1);      // maxTileId
         packet_stream_put_int(mud->packet_stream,
                               game_data.wall_object_count - 1); // maxBoundaryId
-        packet_stream_put_byte(mud->packet_stream, 2); // maxTeleBubbleId (ubyte)
+        packet_stream_put_byte(mud->packet_stream, 2);     // maxTeleBubbleId (ubyte)
         packet_stream_put_short(mud->packet_stream,
                                 game_data.projectile_sprite - 1); // maxProjectileSprite
         // these three declare what the client can render; the server sends appearance indices to match (max index).
         // keep equal to the real array sizes - 1
         packet_stream_put_int(mud->packet_stream,
-                              PLAYER_SKIN_COLOUR_COUNT - 1); // maxSkinColor
+                              PLAYER_SKIN_COLOUR_COUNT - 1);      // maxSkinColor
         packet_stream_put_int(mud->packet_stream,
-                              PLAYER_HAIR_COLOUR_COUNT - 1); // maxHairColor
+                              PLAYER_HAIR_COLOUR_COUNT - 1);      // maxHairColor
         packet_stream_put_int(mud->packet_stream,
-                              PLAYER_TOP_BOTTOM_COLOUR_COUNT - 1); // maxClothingColor
-        packet_stream_put_short(mud->packet_stream, 200); // maxQuestId
-        packet_stream_put_int(mud->packet_stream, 100); // numberOfSounds (COUNT)
+                              PLAYER_TOP_BOTTOM_COLOUR_COUNT - 1);// maxClothingColor
+        packet_stream_put_short(mud->packet_stream, 200);  // maxQuestId
+        packet_stream_put_int(mud->packet_stream, 100);    // numberOfSounds (COUNT)
         // despite the field name, OpenRSC fills this with crownCount - 1 (rank crowns)
         packet_stream_put_byte(mud->packet_stream,
-                               ORSC_CROWN_COUNT - 1); // supportsModSprites (ubyte)
-        packet_stream_put_byte(mud->packet_stream, 5); // maxDialogueOptions (COUNT, ubyte)
+                               ORSC_CROWN_COUNT - 1);  // supportsModSprites (ubyte)
+        packet_stream_put_byte(mud->packet_stream, 5);     // maxDialogueOptions (COUNT, ubyte)
         // count (no -1): bank array capacity, matches OpenRSC ItemId.maxCustom (1592). this and maxDialogueOptions
         // are decorative, the server never reads them back; the client clamps on its own
         packet_stream_put_int(mud->packet_stream, BANK_ITEMS_MAX); // maxBankItems
-        packet_stream_put_string(mud->packet_stream, "63"); // mapHash
-        packet_stream_put_byte(mud->packet_stream, '\n'); // mapHash terminator
+        packet_stream_put_string(mud->packet_stream, "63");// mapHash
+        packet_stream_put_byte(mud->packet_stream, '\n');  // mapHash terminator
 
         if (packet_stream_flush_packet(mud->packet_stream) < 0) {
             mud_error("[login] custom login flush failed -> login_fail\n");
@@ -2585,7 +2577,7 @@ void mudclient_login(mudclient *mud, char *username, char *password,
 
         packet_stream_put_short(mud->packet_stream, PROTOCOL177_VERSION);
 
-        // limit30
+        /* limit30 */
         packet_stream_put_short(mud->packet_stream, 0);
 
         packet_stream_put_long(mud->packet_stream,
@@ -2594,7 +2586,7 @@ void mudclient_login(mudclient *mud, char *username, char *password,
         packet_stream_put_password(mud->packet_stream, (int)session_id,
                                    formatted_password);
 
-        // uid/randomDat
+        /* uid/randomDat */
         packet_stream_put_int(mud->packet_stream, 0);
 
         if (packet_stream_flush_packet(mud->packet_stream) < 0) {
@@ -2615,7 +2607,7 @@ void mudclient_login(mudclient *mud, char *username, char *password,
         packet_stream_new_packet(mud->packet_stream, CLIENT_LOGIN);
         packet_stream_put_byte(mud->packet_stream, reconnecting);
         packet_stream_put_short(mud->packet_stream, LOGIN_VERSION(mud));
-        packet_stream_put_byte(mud->packet_stream, 0); // limit30
+        packet_stream_put_byte(mud->packet_stream, 0); /* limit30 */
 
         packet_stream_put_login_block(mud->packet_stream, formatted_username,
                                       formatted_password, keys, 0);
@@ -2980,7 +2972,7 @@ void mudclient_register(mudclient *mud, char *username, char *password) {
         packet_stream_put_password(mud->packet_stream, (int)session_id,
                                    formatted_password);
 
-        // uid/randomDat
+        /* uid/randomDat */
         packet_stream_put_int(mud->packet_stream, 0);
 
         if (packet_stream_flush_packet(mud->packet_stream) < 0) {
@@ -3012,7 +3004,7 @@ void mudclient_register(mudclient *mud, char *username, char *password) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_REGISTER);
         packet_stream_put_byte(mud->packet_stream, 0);
         packet_stream_put_short(mud->packet_stream, LOGIN_VERSION(mud));
-        packet_stream_put_byte(mud->packet_stream, 0); // limit30
+        packet_stream_put_byte(mud->packet_stream, 0); /* limit30 */
 
         packet_stream_put_login_block(mud->packet_stream, formatted_username,
                                       formatted_password, keys, 0);
@@ -3433,6 +3425,7 @@ static void mudclient_region_rebase_objects(mudclient *mud, int offset_x,
             }
         }
     }
+
 }
 
 // wall objects, ground items and characters follow the same shift
@@ -3704,11 +3697,9 @@ static void mudclient_region_promote_build(mudclient *mud) {
         e->world = mud->region_next_world;
         e->buffers = mud->region_next_buffers;
         e->buffer_length = mud->region_next_buffer_length;
-        e->realized = 0; // upload spread over the next frames
+        e->realized = 0;      // upload spread over the next frames
         e->realize_index = 0; // start uploading buffer 0 next frame
         e->last_touch = ++mud->region_touch_clock;
-
-        fprintf(stderr, "[rgn] ready (%d,%d)\n", e->sx, e->sy);
     }
 
     mud->region_next_world = NULL;
@@ -3876,8 +3867,6 @@ static void mudclient_region_build_into(mudclient *mud, int idx, int sx, int sy,
     mud->region_cache[idx].sy = sy;
     mud->region_cache[idx].plane = plane;
     mud->region_load_state = 1;
-
-    fprintf(stderr, "[rgn] build (%d,%d)\n", sx, sy);
 }
 
 // proximity request: build (sx,sy,plane) unless it's already cached or in flight
@@ -4042,6 +4031,7 @@ static void mudclient_region_install_prebuilt(mudclient *mud, World *world,
     // re-add the incoming region's models to the live scene + upload minimap
     world->defer_scene_adds = 1;
     world_load_section_commit(world);
+
 
     mud->scene->gl_terrain_buffers = buffers;
     mud->scene->gl_terrain_buffer_length = buffer_length;
@@ -4399,11 +4389,8 @@ void mudclient_close_connection(mudclient *mud) {
 #ifdef WITH_SINGLEPLAYER
     // leaving the world for good: end the embedded server (host only, no-op for guests/online)
     singleplayer_leave_world();
-    /* Return the Vita to its normal Wi-Fi-infra state: singleplayer_leave_world()
-     * only closes the listen socket, so free the ad-hoc radio here (leaves the
-     * ad-hoc group, terminates the adhoc libs) to start re-associating now, on the
-     * menu screen, rather than at online-login when infra can't recover in time.
-     * No-op for Offline; safe for LAN (sockets only, infra never dropped). */
+    // return the Vita to normal Wi-Fi infra: free the ad-hoc radio here so it reconnects now, before online-login
+    // no-op for offline, safe for LAN
     spnet_shutdown();
 #endif
 }
@@ -4422,9 +4409,8 @@ void mudclient_lost_connection(mudclient *mud) {
 #ifdef WITH_SINGLEPLAYER
         // back to the login screen for good: end the embedded server (host only); the reconnect branch below does not
         singleplayer_leave_world();
-        /* Same radio cleanup as mudclient_close_connection: free the ad-hoc co-op
-         * radio so the Vita returns to normal Wi-Fi infra. The involuntary-guest
-         * branch below (logout_timeout == 0) keeps ad-hoc up so the guest can rejoin. */
+        // same radio cleanup as mudclient_close_connection: free the ad-hoc co-op radio so the Vita returns to Wi-Fi infra
+        // the involuntary-guest branch below (logout_timeout == 0) keeps ad-hoc up so the guest can rejoin
         spnet_shutdown();
 #endif
     } else {
@@ -5229,6 +5215,7 @@ void mudclient_draw_player(mudclient *mud, int x, int y, int width, int height,
     if (player->bottom_colour == 255) {
         return;
     }
+
 
     int animation_order =
         (player->current_animation + (mud->camera_rotation + 16) / 32) & 7;
@@ -6746,6 +6733,8 @@ void mudclient_draw_game(mudclient *mud) {
             mud->region_old_world, mud->region_old_free_index, 64);
 
         if (mud->region_old_free_index < 0) {
+            // every model slot is NULL now; free the rest like the immediate path
+            world_free_models(mud->region_old_world);
             free(mud->region_old_world);
             mud->region_old_world = NULL;
         }
@@ -7336,8 +7325,17 @@ void mudclient_trigger_keyboard(mudclient *mud, char *text, int is_password,
     SDL_StartTextInput();
 #elif defined(__vita__)
     // open the system IME, seeded with the field's current text
-    vita_ime_open(is_password ? "Enter password" : "Enter text", text,
-                  is_password, text != NULL ? (int)strlen(text) : 0,
+    // the chat line gets its own title so the IME labels its confirm key "Send"
+    int is_chat =
+        mud->panel_message_tabs != NULL &&
+        text == mud->panel_message_tabs->control_text[mud->control_text_list_all];
+    int is_sleep = mud->is_sleeping && text == mud->input_text_current;
+
+    vita_ime_open(is_password ? "Enter password"
+                  : is_chat     ? "Chat"
+                  : is_sleep    ? "Type the word shown to wake up"
+                                : "Enter text",
+                  text, is_password, text != NULL ? (int)strlen(text) : 0,
                   submit_on_enter);
 #elif defined(EMSCRIPTEN)
     int is_scaled = mudclient_is_ui_scaled(mud);

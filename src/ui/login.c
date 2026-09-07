@@ -30,6 +30,15 @@ void mudclient_create_login_panels(mudclient *mud) {
     int show_registration =
         !mud->options->members || mud->options->registration;
 
+#ifdef WITH_SINGLEPLAYER
+    // members-only notice is online-only; skipped for single-player and until a world is selected
+    int hide_members_notice = mud->singleplayer ||
+                              mud->options->last_world >= 1000 ||
+                              mud->server[0] == '\0';
+#else
+    int hide_members_notice = 0;
+#endif
+
     if (show_registration) {
         int offset_x = is_compact ? 16 : 0;
 
@@ -75,9 +84,11 @@ void mudclient_create_login_panels(mudclient *mud) {
                               login_background_height + y,
                               "Welcome to RuneScape", font_style, 1);
 
-        panel_add_text_centre(
-            mud->panel_login_welcome, x, login_background_height + 15 + y,
-            "You need a members account to use this server", font_style, 1);
+        if (!hide_members_notice) {
+            panel_add_text_centre(
+                mud->panel_login_welcome, x, login_background_height + 15 + y,
+                "You need a members account to use this server", font_style, 1);
+        }
 
         panel_add_button_background(mud->panel_login_welcome, x,
                                     login_background_height + 50 + y,
@@ -432,6 +443,7 @@ void mudclient_create_login_panels(mudclient *mud) {
 void mudclient_show_login_screen_status(mudclient *mud, char *s, char *s1) {
     int is_compact = mud->surface->width < MUD_VANILLA_WIDTH ||
                      mud->surface->height < MUD_VANILLA_HEIGHT;
+
 
     if (mud->login_screen == LOGIN_STAGE_NEW) {
         sprintf(login_screen_status, "%s %s", s, s1);

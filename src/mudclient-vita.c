@@ -15,7 +15,7 @@ unsigned int _newlib_heap_size_user = 144 * 1024 * 1024;
 unsigned int _newlib_heap_size_user = 192 * 1024 * 1024;
 #endif
 
-// main-thread stack size; 3d render path overflows the default 256kb stack, corrupting return addresses
+// main-thread stack size; the 3d render path overflows the default 256kb stack, corrupting return addresses
 #ifdef RENDER_GL
 __attribute__((used)) unsigned int sceUserMainThreadStackSize = 4 * 1024 * 1024;
 #endif
@@ -63,13 +63,11 @@ static void vita_utf16_to_utf8(const uint16_t *src, uint8_t *dst) {
     *dst = '\0';
 }
 
-// non-modal on-screen keyboard: vita_ime_open() returns immediately, vita_ime_poll() is called once per frame
+// non-modal on-screen keyboard: vita_ime_open() returns immediately, vita_ime_poll() runs per frame
 static int vita_ime_active = 0;
 static int vita_ime_initial_length = 0;
-/* When set, confirming the IME also forwards a K_ENTER to the focused field
- * (commits input_text_current -> input_text_final), so Enter-submit screens with
- * no on-screen submit button (the sleep word) can be completed. Off by default;
- * set per-open via vita_ime_open's last argument. */
+// when set, confirming the IME forwards K_ENTER to the focused field, so
+// Enter-submit screens with no on-screen submit button (the sleep word) work
 static int vita_ime_submit_on_enter = 0;
 static uint16_t vita_ime_input[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1];
 
@@ -102,6 +100,10 @@ void vita_ime_open(const char *title, const char *initial, int is_password,
     param.option = SCE_IME_OPTION_NO_AUTO_CAPITALIZATION;
     param.textBoxMode = is_password ? SCE_IME_DIALOG_TEXTBOX_MODE_PASSWORD
                                     : SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
+    // the chat field's confirm key reads "Send"; other fields keep "Enter"
+    param.enterLabel = (title != NULL && strcmp(title, "Chat") == 0)
+                           ? SCE_IME_ENTER_LABEL_SEND
+                           : SCE_IME_ENTER_LABEL_DEFAULT;
     param.title = title_u16;
     param.maxTextLength = SCE_IME_DIALOG_MAX_TEXT_LENGTH;
     param.initialText = initial_u16;
@@ -132,7 +134,7 @@ void vita_ime_poll(mudclient *mud) {
         static uint8_t utf8[SCE_IME_DIALOG_MAX_TEXT_LENGTH * 3 + 1];
         vita_utf16_to_utf8(vita_ime_input, utf8);
 
-        // replaces the focused field's contents through its input path; does not send enter
+        // replaces the focused field's contents through its input path; does not send enter by default
         for (int i = 0; i < vita_ime_initial_length; i++) {
             mudclient_key_pressed(mud, K_BACKSPACE, K_BACKSPACE);
         }

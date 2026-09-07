@@ -2,6 +2,40 @@
 
 static const char *magic_tabs[] = {"Magic", "Prayers"};
 
+// favourites: right-click a spell/prayer to pin it top; stored as option bitmasks
+static int spell_is_favourite(mudclient *mud, int i) {
+    if (i < 0) {
+        return 0;
+    }
+    if (i < 32) {
+        return (mud->options->spell_favourites_lo >> i) & 1;
+    }
+    return (mud->options->spell_favourites_hi >> (i - 32)) & 1;
+}
+
+static void spell_toggle_favourite(mudclient *mud, int i) {
+    if (i < 0) {
+        return;
+    }
+    if (i < 32) {
+        mud->options->spell_favourites_lo ^= (1 << i);
+    } else {
+        mud->options->spell_favourites_hi ^= (1 << (i - 32));
+    }
+    options_save(mud->options);
+}
+
+static int prayer_is_favourite(mudclient *mud, int i) {
+    return i >= 0 && i < 32 ? ((mud->options->prayer_favourites >> i) & 1) : 0;
+}
+
+static void prayer_toggle_favourite(mudclient *mud, int i) {
+    if (i >= 0 && i < 32) {
+        mud->options->prayer_favourites ^= (1 << i);
+        options_save(mud->options);
+    }
+}
+
 void mudclient_draw_ui_tab_magic(mudclient *mud, int no_menus) {
     int ui_x = mud->surface->width - MAGIC_WIDTH - 3;
     int ui_y = UI_BUTTON_SIZE + 1;
@@ -65,55 +99,81 @@ void mudclient_draw_ui_tab_magic(mudclient *mud, int no_menus) {
     if (is_touch) {
         handle_panel_input_early = 1;
 
-        panel_handle_mouse(mud->panel_magic, mudclient_finger_1_x,
-                           mudclient_finger_1_y, mud->last_mouse_button_down,
-                           mudclient_finger_1_down, mud->mouse_scroll_delta);
+        // finger while down, else the stick cursor + X, so the scrollbar drags by both
+        int px = mud->mouse_x, py = mud->mouse_y, pdown = mud->mouse_button_down;
+        if (mudclient_finger_1_down) {
+            px = mudclient_finger_1_x;
+            py = mudclient_finger_1_y;
+            pdown = 1;
+        }
+
+        panel_handle_mouse(mud->panel_magic, px, py,
+                           mud->last_mouse_button_down, pdown,
+                           mud->mouse_scroll_delta);
     }
 #endif
 
     char *point = is_touch ? "Tap and hold" : "Point";
+
+    // favourites sort to top: entries added in display order, row_id maps a row to its spell/prayer id
+    int row_id[256];
+    int row_count = 0;
 
     if (mud->ui_tab_magic_sub_tab == 0) {
         panel_clear_list(mud->panel_magic, mud->control_list_magic);
 
         int magic_level = mud->player_skill_current[SKILL_MAGIC];
 
-        for (int i = 0; i < game_data.spell_count; i++) {
-            char colour_prefix[6] = "@yel@";
+        // favourites first (pass 0), then the rest (pass 1)
+        row_count = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < game_data.spell_count; i++) {
+                int fav = spell_is_favourite(mud, i);
 
-            for (int j = 0; j < game_data.spells[i].runes_required; j++) {
-                int rune_id = game_data.spells[i].runes[j].id;
-                int rune_amount = game_data.spells[i].runes[j].count;
-
-                if (mudclient_has_inventory_item(mud, rune_id, rune_amount)) {
+                if ((pass == 0) != (fav != 0)) {
                     continue;
                 }
 
-                strcpy(colour_prefix, "@whi@");
-                break;
+                char colour_prefix[6] = "@yel@";
+
+                for (int j = 0; j < game_data.spells[i].runes_required; j++) {
+                    int rune_id = game_data.spells[i].runes[j].id;
+                    int rune_amount = game_data.spells[i].runes[j].count;
+
+                    if (mudclient_has_inventory_item(mud, rune_id, rune_amount)) {
+                        continue;
+                    }
+
+                    strcpy(colour_prefix, "@whi@");
+                    break;
+                }
+
+                if (game_data.spells[i].level > magic_level) {
+                    strcpy(colour_prefix, "@bla@");
+                }
+
+                if (is_touch && mud->selected_spell == i) {
+                    strcpy(colour_prefix, "@gre@");
+                }
+
+                char formatted_spell[72] = {0};
+
+                sprintf(formatted_spell, "%s%sLevel %d: %s",
+                        fav ? "@or1@* " : "", colour_prefix,
+                        game_data.spells[i].level, game_data.spells[i].name);
+
+                panel_add_list_entry(mud->panel_magic, mud->control_list_magic,
+                                     row_count, formatted_spell);
+                row_id[row_count++] = i;
             }
-
-            if (game_data.spells[i].level > magic_level) {
-                strcpy(colour_prefix, "@bla@");
-            }
-
-            if (is_touch && mud->selected_spell == i) {
-                strcpy(colour_prefix, "@gre@");
-            }
-
-            char formatted_spell[64] = {0};
-
-            sprintf(formatted_spell, "%sLevel %d: %s", colour_prefix,
-                    game_data.spells[i].level, game_data.spells[i].name);
-
-            panel_add_list_entry(mud->panel_magic, mud->control_list_magic, i,
-                                 formatted_spell);
         }
 
         panel_draw_panel(mud->panel_magic);
 
-        int spell_index = panel_get_list_entry_index(mud->panel_magic,
-                                                     mud->control_list_magic);
+        int spell_sel = panel_get_list_entry_index(mud->panel_magic,
+                                                   mud->control_list_magic);
+        int spell_index =
+            (spell_sel >= 0 && spell_sel < row_count) ? row_id[spell_sel] : -1;
 
         if (spell_index != -1) {
             char *spell_name = game_data.spells[spell_index].name;
@@ -179,31 +239,44 @@ void mudclient_draw_ui_tab_magic(mudclient *mud, int no_menus) {
     } else if (mud->ui_tab_magic_sub_tab == 1) {
         panel_clear_list(mud->panel_magic, mud->control_list_magic);
 
-        for (int i = 0; i < game_data.prayer_count; i++) {
-            char colour_prefix[6] = "@whi@";
+        row_count = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < game_data.prayer_count; i++) {
+                int fav = prayer_is_favourite(mud, i);
 
-            if (game_data.prayers[i].level >
-                mud->player_skill_base[SKILL_PRAYER]) {
-                strcpy(colour_prefix, "@bla@");
+                if ((pass == 0) != (fav != 0)) {
+                    continue;
+                }
+
+                char colour_prefix[6] = "@whi@";
+
+                if (game_data.prayers[i].level >
+                    mud->player_skill_base[SKILL_PRAYER]) {
+                    strcpy(colour_prefix, "@bla@");
+                }
+
+                if (mud->prayer_on[i]) {
+                    strcpy(colour_prefix, "@gre@");
+                }
+
+                char formatted_prayer[72] = {0};
+
+                sprintf(formatted_prayer, "%s%sLevel %d: %s",
+                        fav ? "@or1@* " : "", colour_prefix,
+                        game_data.prayers[i].level, game_data.prayers[i].name);
+
+                panel_add_list_entry(mud->panel_magic, mud->control_list_magic,
+                                     row_count, formatted_prayer);
+                row_id[row_count++] = i;
             }
-
-            if (mud->prayer_on[i]) {
-                strcpy(colour_prefix, "@gre@");
-            }
-
-            char formatted_prayer[64] = {0};
-
-            sprintf(formatted_prayer, "%sLevel %d: %s", colour_prefix,
-                    game_data.prayers[i].level, game_data.prayers[i].name);
-
-            panel_add_list_entry(mud->panel_magic, mud->control_list_magic, i,
-                                 formatted_prayer);
         }
 
         panel_draw_panel(mud->panel_magic);
 
-        int prayer_index = panel_get_list_entry_index(mud->panel_magic,
-                                                      mud->control_list_magic);
+        int prayer_sel = panel_get_list_entry_index(mud->panel_magic,
+                                                    mud->control_list_magic);
+        int prayer_index =
+            (prayer_sel >= 0 && prayer_sel < row_count) ? row_id[prayer_sel] : -1;
 
         if (prayer_index != -1) {
             char *prayer_name = game_data.prayers[prayer_index].name;
@@ -248,6 +321,24 @@ void mudclient_draw_ui_tab_magic(mudclient *mud, int no_menus) {
         }
     }
 
+    // right-click (R / long-press) a spell/prayer to (un)favourite the hovered row
+    if (mud->mouse_button_click == 2) {
+        int sel = panel_get_list_entry_index(mud->panel_magic,
+                                             mud->control_list_magic);
+        int idx = (sel >= 0 && sel < row_count) ? row_id[sel] : -1;
+        if (idx != -1) {
+            if (mud->ui_tab_magic_sub_tab == 0) {
+                spell_toggle_favourite(mud, idx);
+            } else {
+                prayer_toggle_favourite(mud, idx);
+            }
+            panel_reset_list(mud->panel_magic, mud->control_list_magic);
+            mud->mouse_button_click = 0;
+            mud->show_right_click_menu = 0; // don't also pop the context menu
+            return;
+        }
+    }
+
     if (!no_menus) {
         return;
     }
@@ -282,8 +373,10 @@ void mudclient_draw_ui_tab_magic(mudclient *mud, int no_menus) {
     }
 
     if (mud->ui_tab_magic_sub_tab == 0) {
-        int spell_index = panel_get_list_entry_index(mud->panel_magic,
-                                                     mud->control_list_magic);
+        int spell_sel = panel_get_list_entry_index(mud->panel_magic,
+                                                   mud->control_list_magic);
+        int spell_index =
+            (spell_sel >= 0 && spell_sel < row_count) ? row_id[spell_sel] : -1;
 
         if (spell_index != -1) {
             int magic_level = mud->player_skill_current[SKILL_MAGIC];
@@ -325,8 +418,10 @@ void mudclient_draw_ui_tab_magic(mudclient *mud, int no_menus) {
             }
         }
     } else if (mud->ui_tab_magic_sub_tab == 1) {
-        int prayer_index = panel_get_list_entry_index(mud->panel_magic,
-                                                      mud->control_list_magic);
+        int prayer_sel = panel_get_list_entry_index(mud->panel_magic,
+                                                    mud->control_list_magic);
+        int prayer_index =
+            (prayer_sel >= 0 && prayer_sel < row_count) ? row_id[prayer_sel] : -1;
 
         if (prayer_index != -1) {
             int prayer_level = mud->player_skill_base[SKILL_PRAYER];

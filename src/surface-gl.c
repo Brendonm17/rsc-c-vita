@@ -13,16 +13,87 @@ gl_atlas_position gl_transparent_atlas_position = {
     .top_v = (GL_TEXTURE_SIZE - 1.0f) / GL_TEXTURE_SIZE,
     .bottom_v = (GL_TEXTURE_SIZE) / GL_TEXTURE_SIZE};
 
-static unsigned int last_base_texture = 0;
+// base-texture binding cache is per flush now, see surface_gl_draw
 
 #ifdef RENDER_GL
-// combined 2D atlas dimensions: 4 columns x 2 rows of 1024px cells
-#define GL_COMBINED_ATLAS_WIDTH 4096
+// combined 2D atlas: 3 x 2 cells of 1024px (sprite sheet + five entity sheets)
+#define GL_COMBINED_ATLAS_WIDTH 3072
 #define GL_COMBINED_ATLAS_HEIGHT 2048
 #define GL_COMBINED_CELL 1024
 
-// upload one source sheet into its cell of the combined atlas (must be the currently bound GL_TEXTURE_2D). returns 1
-// on success. a missing required sheet is fatal; a missing optional one returns 0
+// custom-entity sheet (worn-equipment layers + no-body NPC bodies) is its own 5551 texture;
+// an absent sheet returns 0 and the draw branch is skipped
+static GLuint surface_gl_load_custom_entity_texture(const char *file) {
+    SDL_Surface *loaded = IMG_Load(file);
+
+    if (loaded == NULL) {
+        mud_error("unable to load optional %s texture\n%s\n", file,
+                  IMG_GetError());
+        return 0;
+    }
+
+    SDL_Surface *image = loaded;
+
+#ifndef SDL12
+    // the Vita loader already hands back RGBA32; desktop SDL_image may not
+    if (loaded->format->format != SDL_PIXELFORMAT_RGBA32) {
+        image = SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_FreeSurface(loaded);
+
+        if (image == NULL) {
+            mud_error("unable to convert %s to RGBA\n", file);
+            return 0;
+        }
+    }
+#endif
+
+    int width = image->w;
+    int height = image->h;
+    uint16_t *packed = malloc((size_t)width * height * sizeof(uint16_t));
+
+    if (packed == NULL) {
+        SDL_FreeSurface(image);
+        return 0;
+    }
+
+    for (int y = 0; y < height; y++) {
+        const uint8_t *row = (const uint8_t *)image->pixels + (size_t)y * image->pitch;
+        uint16_t *out = packed + (size_t)y * width;
+
+        for (int x = 0; x < width; x++) {
+            const uint8_t *p = row + x * 4;
+
+            // GL_UNSIGNED_SHORT_5_5_5_1: R in the top five bits, A in bit 0
+            out[x] = (uint16_t)(((p[0] >> 3) << 11) | ((p[1] >> 3) << 6) |
+                                ((p[2] >> 3) << 1) | (p[3] >= 128 ? 1 : 0));
+        }
+    }
+
+    SDL_FreeSurface(image);
+
+    GLuint texture = 0;
+    gl_create_texture(&texture);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_SHORT_5_5_5_1, packed);
+
+    free(packed);
+
+#ifdef RENDER_GL
+    GLenum upload_error = glGetError();
+
+    if (upload_error != GL_NO_ERROR) {
+        mud_error("texture upload %s GL error 0x%x\n", file,
+                  (unsigned int)upload_error);
+    }
+#endif
+
+
+    return texture;
+}
+
+// upload one source sheet into its combined-atlas cell (currently bound GL_TEXTURE_2D);
+// returns 1 on success; a missing required sheet is fatal, an optional one returns 0
 static int surface_gl_load_into_combined(const char *file, int x, int y,
                                          int required) {
     SDL_Surface *texture_image = IMG_Load(file);
@@ -33,8 +104,7 @@ static int surface_gl_load_into_combined(const char *file, int x, int y,
             exit(1);
         }
 
-        // an optional sheet (the custom-entity atlas) must not fail silently: a missed load turns every custom worn
-        // layer and no-body NPC invisible
+        // an optional sheet must not fail silently: a missed load turns every custom worn layer and no-body NPC invisible
         mud_error("unable to load optional %s texture\n%s\n", file,
                   IMG_GetError());
         return 0;
@@ -72,8 +142,8 @@ static int surface_gl_load_into_combined(const char *file, int x, int y,
     return 1;
 }
 
-// remap an atlas position from a source sheet's [0,1] UV space into that sheet's cell of the combined atlas. the
-// result is clamped half a combined-atlas texel inside the cell so a border UV can't cross into the neighbouring cell. row_span 2 = a full-height (1024x2048) cell
+// remap an atlas position from a source sheet's [0,1] UV into its combined-atlas cell;
+// result clamped half a texel inside the cell so a border UV can't cross into the next cell; row_span 2 = full-height cell
 static gl_atlas_position surface_gl_combined_position(gl_atlas_position p,
                                                       int col, int row,
                                                       int row_span) {
@@ -164,8 +234,8 @@ void surface_gl_new(Surface *surface, int width, int height, int limit,
     surface->gl_flat_staging = calloc(GL_MAX_QUADS, sizeof(gl_quad));
     surface->gl_flat_uploaded = 0;
 
-    // the quad->triangle index pattern (0,1,2, 0,2,3 per quad) never changes: upload the whole element buffer once.
-    // 16-bit indices: the max vertex index is GL_MAX_QUADS*4 - 1 (8191 for GL_MAX_QUADS = 2048), fits a GLushort
+    // quad->triangle index pattern (0,1,2, 0,2,3 per quad) never changes: upload the whole element buffer once;
+    // 16-bit indices fit (max vertex index GL_MAX_QUADS*4 - 1 = 8191)
     {
         GLushort *static_indices = malloc(GL_MAX_QUADS * 6 * sizeof(GLushort));
 
@@ -217,8 +287,8 @@ void surface_gl_new(Surface *surface, int width, int height, int limit,
 #define GL_TEXTURE_DIR "./cache/textures/"
 #endif
 
-    // combined 2D atlas: the sprite sheet, the five entity sheets and the optional custom-entity sheet are packed
-    // into one 4096x2048 texture as 1024px cells, so nearly every 2D quad shares a single texture pair and batches into one draw call. cell layout (col,row): sprites (0,0) entities_0 (1,0) entities_1 (2,0) entities_3 (0,1) entities_4 (1,1) entities_2 (2,1) custom_entities column 3 full 2048 height
+    // combined 2D atlas: sprite sheet + five entity sheets in one 3072x2048 texture (1024px cells), so nearly every 2D quad batches into one draw call.
+    // cell (col,row): sprites (0,0) entities_0 (1,0) entities_1 (2,0) entities_3 (0,1) entities_4 (1,1) entities_2 (2,1)
     {
         GLuint combined = 0;
         gl_create_texture(&combined);
@@ -245,20 +315,15 @@ void surface_gl_new(Surface *surface, int width, int height, int limit,
 
         surface->gl_sprite_texture = combined;
 
-        // optional OpenRSC custom worn-equipment layers and no-body NPC bodies; if the sheet is absent the texture id
-        // stays 0 and the custom-entity draw branch is skipped
+        // optional custom worn-equipment layers + no-body NPC bodies; absent sheet leaves the id 0 and skips the draw branch
         surface->gl_custom_entity_texture = 0;
-
-        if (surface_gl_load_into_combined(
-                GL_TEXTURE_DIR "custom_entities.png", 3072, 0, 0)) {
-            surface->gl_custom_entity_texture = combined;
-            // positive confirmation in the log
-            mud_error("[gfx] custom entity sheet loaded\n");
-        }
     }
 
-    // optional separate atlas for OpenRSC custom item icons (1024x512, does not fit the combined atlas); if absent
-    // the texture id stays 0 and the custom-sprite draw branch is skipped
+    // separate 16-bit texture; created after the atlas so the atlas keeps the lower texture id
+    surface->gl_custom_entity_texture = surface_gl_load_custom_entity_texture(
+        GL_TEXTURE_DIR "custom_entities.png");
+
+    // optional separate atlas for custom item icons (1024x512, does not fit the combined atlas); absent leaves id 0 and skips the draw branch
     surface->gl_custom_texture = 0;
     {
         const char *custom_path = GL_TEXTURE_DIR "custom_sprites.png";
@@ -440,8 +505,8 @@ void surface_gl_quad_apply_base_atlas(gl_quad *quad,
 }
 
 #if defined(__vita__) && defined(RENDER_GL)
-// inset an atlas cell's UV rect by half a texel on each edge so GL_NEAREST never samples the shared boundary with the
-// neighbouring cell. insets left/right and top/bottom symmetrically, so it stays correct before the optional flip swap. cells only ~1 texel wide/tall collapse to the cell centre instead. Vita/RENDER_GL only
+// inset an atlas cell's UV rect by half a texel per edge so GL_NEAREST never samples the shared boundary;
+// insets symmetrically so it stays correct before the flip swap; ~1-texel cells collapse to centre; Vita/RENDER_GL only
 static gl_atlas_position
 surface_gl_inset_atlas_position(gl_atlas_position position) {
     const float inset = 0.5f / 1024.0f;
@@ -479,8 +544,8 @@ surface_gl_inset_atlas_position(gl_atlas_position position) {
     return position;
 }
 
-// nudge only the top+left edges of a glyph cell inward by a tiny fraction of a texel, leaving bottom/right on the
-// cell boundary
+// nudge only the top+left edges of a glyph cell inward by a fraction of a texel,
+// leaving bottom/right on the cell boundary; Vita/RENDER_GL only
 static gl_atlas_position
 surface_gl_inset_glyph_top_left(gl_atlas_position position) {
     // inset all four edges toward the cell centre by a quarter-texel
@@ -561,8 +626,7 @@ void gl_vertex_apply_rotation(float *x, float *y, float centre_x,
 }
 
 #ifdef RENDER_GL
-// clip an axis-aligned quad against the current surface bounds on the CPU; returns 0 when the quad is entirely
-// outside
+// clip an axis-aligned quad against the current surface bounds on the CPU; returns 0 when the quad is entirely outside
 static int surface_gl_clip_quad_to_bounds(Surface *surface, gl_quad *quad) {
     float bx0 = surface_gl_translate_x(surface, surface->bounds_min_x);
     float bx1 = surface_gl_translate_x(surface, surface->bounds_max_x);
@@ -676,13 +740,20 @@ void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, GLuint texture,
 void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, C3D_Tex *texture,
                             C3D_Tex *base_texture) {
 #endif
+    // an overflow drops the quad; the log line is rate-limited
+    static int overflow_dropped = 0;
+
     if (surface->gl_context_count >= GL_MAX_QUADS) {
-        mud_error("too many context (texture/boundary) switches!\n");
+        if ((overflow_dropped++ % 2000) == 0) {
+            mud_error("too many context (texture/boundary) switches!\n");
+        }
         return;
     }
 
     if (surface->gl_flat_count >= GL_MAX_QUADS) {
-        mud_error("too many quads!\n");
+        if ((overflow_dropped++ % 2000) == 0) {
+            mud_error("too many quads (%d dropped so far)!\n", overflow_dropped);
+        }
         return;
     }
 
@@ -693,8 +764,8 @@ void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, C3D_Tex *texture,
     (void)ebo_index;
     (void)vertex_offset;
 
-    // axis-aligned quads (sprites, glyphs, boxes) get clipped against the current bounds here; rotated and skewed
-    // quads keep the scissored path
+    // axis-aligned quads (sprites, glyphs, boxes) get clipped against the current bounds here;
+    // rotated and skewed quads keep the scissored path
     int axis_aligned = quad->top_left.x == quad->bottom_left.x &&
                        quad->top_right.x == quad->bottom_right.x &&
                        quad->top_left.y == quad->top_right.y &&
@@ -727,8 +798,7 @@ void surface_gl_buffer_quad(Surface *surface, gl_quad *quad, C3D_Tex *texture,
     SurfaceGlContext *context = &surface->gl_contexts[context_index];
 
 #ifdef RENDER_GL
-    // a context = one glDrawElements at flush; splits on a state change: texture, base texture, depth mode, or
-    // entering/leaving the scissored path
+    // a context = one glDrawElements at flush; splits on a state change: texture, base texture, depth mode, or entering/leaving the scissored path
     int use_depth = quad->bottom_left.z != 0;
 
     if (context->use_depth == use_depth &&
@@ -1006,8 +1076,8 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
                sprite_id >= GL_CUSTOM_ENTITY_FILE_BASE &&
                sprite_id < GL_CUSTOM_ENTITY_FILE_BASE +
                                GL_CUSTOM_ENTITY_SLOT_COUNT) {
-        // OpenRSC custom worn-equipment layer / no-body NPC body: a layered animation frame in the custom-entity
-        // range, sampled from the custom-entity atlas
+        // OpenRSC custom worn-equipment layer / no-body NPC body: a layered animation frame in the custom-entity range,
+        // sampled from the custom-entity atlas
         int custom_entity_index = sprite_id - GL_CUSTOM_ENTITY_FILE_BASE;
 
         texture = surface->gl_custom_entity_texture;
@@ -1015,13 +1085,9 @@ void surface_gl_buffer_sprite(Surface *surface, int sprite_id, int x, int y,
         atlas_position = gl_custom_entity_atlas_positions[custom_entity_index];
         base_atlas_position = gl_transparent_atlas_position;
 #ifdef RENDER_GL
-        // the custom-entity sheet is the full-height column 3 cell
-        tex_col = 3;
-        tex_row = 0;
-        tex_span = 2;
-        base_col = 3;
-        base_row = 0;
-        base_span = 2;
+        // its own texture: UVs are sheet-local, no combined-cell remap
+        tex_col = -1;
+        base_col = -1;
 #endif
     } else if (sprite_id >= surface->mud->sprite_media &&
                sprite_id < surface->mud->sprite_projectile +
@@ -1384,6 +1450,10 @@ void surface_gl_draw(Surface *surface, GL_DEPTH_MODE depth_mode) {
 
     GLuint last_texture = 0;
 
+    // both bindings are re-established on the first context of every flush;
+    // a static base-texture cache went stale when anything else bound unit 1
+    GLuint last_base_texture = 0;
+
     for (int i = 0; i < surface->gl_context_count; i++) {
         SurfaceGlContext *context = &surface->gl_contexts[i];
 
@@ -1405,8 +1475,8 @@ void surface_gl_draw(Surface *surface, GL_DEPTH_MODE depth_mode) {
             int bounds_height = max_y - min_y;
 
 #ifdef __vita__
-            // scale the scissor rect from game pixels to the 960x544 panel; while capturing into the login FBO the
-            // target is 1:1 so use unscaled coords
+            // scale the scissor rect from game pixels to the 960x544 panel;
+            // while capturing into the login FBO the target is 1:1 so use unscaled coords
             if (surface->gl_capture_active) {
                 glScissor(min_x,
                           surface->mud->game_height - min_y - bounds_height,
@@ -1448,6 +1518,9 @@ void surface_gl_draw(Surface *surface, GL_DEPTH_MODE depth_mode) {
             glActiveTexture(GL_TEXTURE0 + 1);
             glBindTexture(GL_TEXTURE_2D, base_texture);
 
+            // never leave unit 1 active: every other glBindTexture assumes unit 0
+            glActiveTexture(GL_TEXTURE0);
+
             last_base_texture = base_texture;
         }
 
@@ -1480,8 +1553,7 @@ void surface_gl_raster_to_sprite(Surface *surface, int sprite_id, int x,
     int offset_y = (sprite_id - surface->mud->sprite_logo) * height;
     int offset_x = MINIMAP_SPRITE_WIDTH;
 
-    // login backdrop is a banner `width` px wide captured from the centre of the game_width-wide FBO; no-op when
-    // game_width == width
+    // login backdrop is a banner `width` px wide captured from the centre of the game_width-wide FBO; no-op when game_width == width
     int src_x0 = (surface->mud->game_width - width) / 2;
 
     if (src_x0 < 0) {
@@ -1524,12 +1596,13 @@ void surface_gl_create_framebuffer(Surface *surface) {
         surface->mud->game_width * surface->mud->game_height, sizeof(uint32_t));
 
 #if defined(__vita__)
-    // create the off-screen render target for the login background capture: game_width x game_height RGBA8 colour
-    // texture + depth renderbuffer
+    // create the off-screen render target for the login background capture:
+    // game_width x game_height RGBA8 colour texture + depth renderbuffer
     int gw = surface->mud->game_width;
     int gh = surface->mud->game_height;
 
     glGenTextures(1, &surface->gl_login_color_tex);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, surface->gl_login_color_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, gw, gh, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, NULL);
@@ -1593,6 +1666,7 @@ void surface_gl_capture_end(Surface *surface) {
 #endif
 
 void surface_gl_update_dynamic_texture(Surface *surface) {
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, surface->gl_dynamic_texture);
 
     // storage was allocated at creation; update texels in place
@@ -1613,6 +1687,7 @@ void surface_gl_update_dynamic_texture_rows(Surface *surface, int y,
         return;
     }
 
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, surface->gl_dynamic_texture);
 
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, 1024, height, GL_RGB,

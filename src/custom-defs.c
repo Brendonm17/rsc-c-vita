@@ -1,4 +1,4 @@
-// custom item, NPC, and object definitions overlaid onto the base game data
+// custom item/NPC/object defs overlaid on base game data; generated then hand-extended, do not regenerate
 #include "custom-defs.h"
 #include "game-data.h"
 #include "surface.h"
@@ -943,11 +943,11 @@ static void game_data_append_custom_entity_animations(void) {
         return; // already appended
     }
 
+    // purely additive: skip only when the config already defines every custom animation name
     int base = game_data.animation_count;
 
-    // extended table is index-aligned to OpenRSC's appearanceId-1, so it sits on
-    // top of the 229-entry authentic base; skip the append unless the loaded config
-    // is that length, else custom (10010) worn appearance ids misalign
+    // extended table is index-aligned to OpenRSC's appearanceId-1, on top of the 229-entry authentic base;
+    // skip the append unless the loaded config is that length
     if (base != OPENRSC_EXT_ANIM_BASE_INDEX) {
         mud_error("[gfx] ext-anim append SKIPPED: base=%d (expected %d)\n", base,
                   OPENRSC_EXT_ANIM_BASE_INDEX);
@@ -973,9 +973,8 @@ static void game_data_append_custom_entity_animations(void) {
         ac->has_a = e->has_a;
         ac->has_f = 0;
 
-        // file_id: names matching a custom-entity atlas sprite take that sprite's
-        // high file_id (drawn from custom_entities.png); names matching an authentic
-        // base sprite get 0, so load_entities' name-dedup gives them the base file_id
+        // file_id: names matching a custom-entity atlas sprite take that sprite's high file_id;
+        // names matching an authentic base sprite get 0, so load_entities' name-dedup gives them the base file_id
         int fid = 0;
         for (int j = 0; j < GL_CUSTOM_ENTITY_ANIM_COUNT; j++) {
             if (strcmp(gl_custom_entity_anims[j].name, e->name) == 0) {
@@ -988,9 +987,6 @@ static void game_data_append_custom_entity_animations(void) {
 
     game_data.animation_count = total;
     custom_entity_anim_base = base;
-
-    mud_error("[gfx] openrsc ext anims appended at %d (count %d)\n", base,
-              OPENRSC_EXT_ANIM_COUNT);
 }
 
 // resolve a custom-entity animation NAME to its animations[] index, or -1
@@ -998,10 +994,8 @@ static int custom_entity_anim_index(const char *name) {
     if (custom_entity_anim_base < 0) {
         return -1;
     }
-    // index-aligned now, so a layer's animation name can resolve in the authentic
-    // base or the extended range -- search the whole table, first match wins
-    // (metal/colour variants resolve to their first; a layered NPC override needing
-    // a specific variant is refined by exact appearance index, CUSTOM_LAYERED_ANIM_OVERRIDES)
+    // index-aligned now, so a layer's animation name can resolve in the authentic base or the extended range;
+    // search the whole table, first match wins
     for (int i = 0; i < game_data.animation_count; i++) {
         const char *n = game_data.animations[i].name;
         if (n != NULL && strcmp(n, name) == 0) {
@@ -1016,10 +1010,10 @@ static const struct {
     int npc_id;
     const char *anim_name;
 } CUSTOM_NOBODY_NPCS[] = {
-    {800, "kiteshield"}, // Gaia
+    {800, "kiteshield"},  // Gaia
     {804, "fishingcape"}, // Greatwood
-    {816, "bunny"}, // Bunny
-    {817, "duck"}, // Duck
+    {816, "bunny"},       // Bunny
+    {817, "duck"},        // Duck
 };
 #define CUSTOM_NOBODY_NPC_COUNT \
     ((int)(sizeof(CUSTOM_NOBODY_NPCS) / sizeof(CUSTOM_NOBODY_NPCS[0])))
@@ -1030,19 +1024,19 @@ static const struct {
     int slot;
     const char *anim_name;
 } CUSTOM_LAYERED_ANIM_OVERRIDES[] = {
-    {802, 7, "armorskirt"}, // Ultimate Ironman tutor, legs
-    {813, 6, "fleatherbody"}, // Robin Banks, torso
-    {819, 4, "scythe"}, // Death, weapon
-    {819, 5, "deathmask"}, // Death, mask
-    {821, 6, "santabody"}, // Santa, torso
-    {821, 7, "santalegs"}, // Santa, legs
-    {822, 5, "ogreears"}, // Kresh, ears
-    {822, 6, "leathervest"}, // Kresh, vest
+    {802, 7, "armorskirt"},      // Ultimate Ironman tutor, legs
+    {813, 6, "fleatherbody"},    // Robin Banks, torso
+    {819, 4, "scythe"},          // Death, weapon
+    {819, 5, "deathmask"},       // Death, mask
+    {821, 6, "santabody"},       // Santa, torso
+    {821, 7, "santalegs"},       // Santa, legs
+    {822, 5, "ogreears"},        // Kresh, ears
+    {822, 6, "leathervest"},     // Kresh, vest
     {823, 11, "harvestingcape"}, // Lily, cape
-    {825, 6, "mortimertorso"}, // Mortimer, torso
-    {826, 6, "randolphtorso"}, // Randolph, torso
-    {828, 0, "biggum"}, // Biggum Flodrot, hero overlay
-    {837, 1, "ashtorso"}, // Ash, torso
+    {825, 6, "mortimertorso"},   // Mortimer, torso
+    {826, 6, "randolphtorso"},   // Randolph, torso
+    {828, 0, "biggum"},          // Biggum Flodrot, hero overlay
+    {837, 1, "ashtorso"},        // Ash, torso
 };
 #define CUSTOM_LAYERED_ANIM_OVERRIDE_COUNT \
     ((int)(sizeof(CUSTOM_LAYERED_ANIM_OVERRIDES) / sizeof(CUSTOM_LAYERED_ANIM_OVERRIDES[0])))
@@ -1072,7 +1066,7 @@ void game_data_append_custom(void) {
         it->base_price = CUSTOM_ITEMS[i].price;
         it->wearable = CUSTOM_ITEM_WEARABLE[i]; // equip-slot bitmask (0 if none)
         it->mask = 0;
-        // stackable polarity: 0 = stacks/carries an amount on the wire
+        // stackable polarity: 0 = stacks/carries an amount on the wire (inverse of the JSON boolean, so invert here)
         it->stackable = CUSTOM_ITEMS[i].stackable ? 0 : 1;
         it->special = CUSTOM_ITEMS[i].special;
         it->members = CUSTOM_ITEMS[i].members;
@@ -1161,6 +1155,10 @@ void game_data_append_custom(void) {
             nc->name = strdup(CUSTOM_NPCS[i].name);
             nc->description = strdup(CUSTOM_NPCS[i].description);
             nc->command = strdup(CUSTOM_NPCS[i].command);
+            // OpenRSC NpcDefsCustom: the Auction Clerk's second command
+            nc->command2 = strcmp(CUSTOM_NPCS[i].name, "Auction Clerk") == 0
+                               ? strdup("Teleport")
+                               : NULL;
             nc->attack = CUSTOM_NPCS[i].attack;
             nc->strength = CUSTOM_NPCS[i].strength;
             nc->hits = CUSTOM_NPCS[i].hits;
@@ -1179,6 +1177,8 @@ void game_data_append_custom(void) {
             int id = BANKER_IDS[b];
             if (id >= 0 && id < game_data.npc_count) {
                 game_data.npcs[id].command = strdup("Bank");
+                // their bankerOption2: "Collect" (auction proceeds) since the SP world spawns the auction NPCs
+                game_data.npcs[id].command2 = strdup("Collect");
             }
         }
     }

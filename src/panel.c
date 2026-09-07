@@ -605,8 +605,20 @@ static int panel_prepare_component(Panel *panel, PanelControlType type, int x,
     return panel->control_count++;
 }
 
+// refuse before an adder writes past the arrays on a full panel; -1 is the sentinel callers tolerate
+#define PANEL_REFUSE_IF_FULL(panel)                                            \
+    do {                                                                       \
+        if ((panel)->control_count >= (panel)->max_controls) {                 \
+            fprintf(stderr,                                                    \
+                    "[panel] refused control %d: panel full (max %d)\n",       \
+                    (panel)->control_count, (panel)->max_controls);            \
+            return -1;                                                         \
+        }                                                                      \
+    } while (0)
+
 int panel_add_text(Panel *panel, int x, int y, char *text, FontStyle font_style,
                    int flag) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_font_style[panel->control_count] = font_style;
     panel->control_use_alternative_colour[panel->control_count] = flag;
 
@@ -618,6 +630,7 @@ int panel_add_text(Panel *panel, int x, int y, char *text, FontStyle font_style,
 
 int panel_add_text_centre(Panel *panel, int x, int y, char *text,
                           FontStyle font_style, int flag) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_font_style[panel->control_count] = font_style;
     panel->control_use_alternative_colour[panel->control_count] = flag;
 
@@ -628,6 +641,7 @@ int panel_add_text_centre(Panel *panel, int x, int y, char *text,
 }
 
 int panel_add_box_rounded(Panel *panel, int x, int y, int width, int height) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_width[panel->control_count] = width;
     panel->control_height[panel->control_count] = height;
 
@@ -636,6 +650,7 @@ int panel_add_box_rounded(Panel *panel, int x, int y, int width, int height) {
 }
 
 int panel_add_sprite(Panel *panel, int x, int y, int sprite_id) {
+    PANEL_REFUSE_IF_FULL(panel);
     int width = panel->surface->sprite_width[sprite_id];
     int height = panel->surface->sprite_height[sprite_id];
 
@@ -649,6 +664,7 @@ int panel_add_sprite(Panel *panel, int x, int y, int sprite_id) {
 
 int panel_add_text_list(Panel *panel, int x, int y, int width, int height,
                         FontStyle font_style, int max_list_entries, int flag) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_width[panel->control_count] = width;
     panel->control_height[panel->control_count] = height;
     panel->control_use_alternative_colour[panel->control_count] = flag;
@@ -669,6 +685,7 @@ int panel_add_text_list(Panel *panel, int x, int y, int width, int height,
 int panel_add_text_list_input(Panel *panel, int x, int y, int width, int height,
                               FontStyle font_style, int max_length,
                               int is_password, int flag1) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_mask_text[panel->control_count] = is_password;
     panel->control_font_style[panel->control_count] = font_style;
     panel->control_use_alternative_colour[panel->control_count] = flag1;
@@ -682,6 +699,7 @@ int panel_add_text_list_input(Panel *panel, int x, int y, int width, int height,
 int panel_add_text_input(Panel *panel, int x, int y, int width, int height,
                          FontStyle font_style, int max_length, int is_password,
                          int flag1) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_mask_text[panel->control_count] = is_password;
     panel->control_font_style[panel->control_count] = font_style;
     panel->control_use_alternative_colour[panel->control_count] = flag1;
@@ -695,6 +713,7 @@ int panel_add_text_input(Panel *panel, int x, int y, int width, int height,
 int panel_add_text_list_interactive(Panel *panel, int x, int y, int width,
                                     int height, FontStyle font_style,
                                     int max_length, int flag) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_shown[panel->control_count] = 1;
     panel->control_font_style[panel->control_count] = font_style;
     panel->control_use_alternative_colour[panel->control_count] = flag;
@@ -718,6 +737,7 @@ int panel_add_text_list_interactive(Panel *panel, int x, int y, int width,
 
 int panel_add_button_background(Panel *panel, int x, int y, int width,
                                 int height) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_width[panel->control_count] = width;
     panel->control_height[panel->control_count] = height;
 
@@ -726,6 +746,7 @@ int panel_add_button_background(Panel *panel, int x, int y, int width,
 }
 
 int panel_add_button(Panel *panel, int x, int y, int width, int height) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_width[panel->control_count] = width;
     panel->control_height[panel->control_count] = height;
 
@@ -734,6 +755,7 @@ int panel_add_button(Panel *panel, int x, int y, int width, int height) {
 }
 
 int panel_add_checkbox(Panel *panel, int x, int y, int width, int height) {
+    PANEL_REFUSE_IF_FULL(panel);
     panel->control_width[panel->control_count] = width;
     panel->control_height[panel->control_count] = height;
 

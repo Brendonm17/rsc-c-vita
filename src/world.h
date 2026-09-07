@@ -24,6 +24,21 @@
 
 typedef struct World World;
 
+// plane-0 quadrant arrays captured after decode, restored after the upper-floor
+// passes overwrite them; per-world so worker and main-thread loads don't clash
+// [4][48 * 48] == [PLANE_COUNT][TILE_COUNT]
+typedef struct WorldGroundSnapshot {
+    int8_t terrain_height[4][48 * 48];
+    int8_t terrain_colour[4][48 * 48];
+    int8_t walls_north_south[4][48 * 48];
+    int8_t walls_east_west[4][48 * 48];
+    uint16_t walls_diagonal[4][48 * 48];
+    int8_t walls_roof[4][48 * 48];
+    int8_t tile_decoration[4][48 * 48];
+    int8_t tile_direction[4][48 * 48];
+    int valid;
+} WorldGroundSnapshot;
+
 #include "mudclient.h"
 #include "version.h"
 
@@ -104,6 +119,7 @@ struct World {
     int8_t terrain_height[PLANE_COUNT][TILE_COUNT];
     int8_t tile_decoration[PLANE_COUNT][TILE_COUNT];
     int8_t tile_direction[PLANE_COUNT][TILE_COUNT];
+    WorldGroundSnapshot ground_snapshot;
     GameModel *wall_models[PLANE_COUNT][TILE_COUNT];
     int8_t walls_east_west[PLANE_COUNT][TILE_COUNT];
     int8_t walls_north_south[PLANE_COUNT][TILE_COUNT];
@@ -122,19 +138,19 @@ struct World {
 
     int8_t thick_walls;
 
-    // whether to overlay the injected OpenRSC custom landscape (rune island + custom map edits) on sector loads
+    // whether to overlay the OpenRSC custom landscape on sector loads
     int8_t apply_custom_landscape;
 
-    // while set, world_load_section skips every live-side effect (scene adds, screen clear, minimap texture upload);
-    // world_load_section_commit replays them
+    // while set, world_load_section skips live-side effects (scene adds, screen
+    // clear, minimap upload); world_load_section_commit replays them
     int8_t defer_scene_adds;
 
-    // a detached world built by the prefetch worker: its models are in no scene; world_reset must not touch
-    // world->scene
+    // detached world built by the prefetch worker; its models are in no scene, so
+    // world_reset must not touch world->scene
     int8_t detached;
 
-    // when non-NULL the minimap pixel writes go here (private worker scratch) instead of the shared surface texture
-    // buffer
+    // when non-NULL, minimap pixel writes go here (private worker scratch) instead
+    // of the shared surface texture buffer
     uint8_t *minimap_buffer;
 };
 

@@ -29,7 +29,7 @@ void mudclient_orsc_send_party_action(mudclient *mud, int action,
         packet_stream_put_string_newline(mud->packet_stream, (char *)str1);
     }
 
-    // invite reads player+name+tag; name/tag are sent empty
+    // invite reads player + name + tag; name/tag are sent empty
     if (action == PARTY_OPTION_INVITE_PLAYER_OR_MAKE) {
         packet_stream_put_string_newline(mud->packet_stream, "");
         packet_stream_put_string_newline(mud->packet_stream, "");
@@ -288,12 +288,13 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
     int party_tab_index = -1;
 
 #ifndef REVISION_177
-    if (mud->protocol_custom && mud->orsc.want_clans) {
+    // clans also exist on the SP/co-op wire, like parties
+    if ((mud->protocol_custom && mud->orsc.want_clans) || MUD_SP_WIRE(mud)) {
         clan_tab_index = social_tab_count;
         social_tab_names[social_tab_count++] = "Clan";
     }
 
-    // parties also exist on the SP co-op wire
+    // parties also exist on the SP/co-op wire
     if ((mud->protocol_custom && mud->orsc.want_parties) ||
         MUD_SP_WIRE(mud)) {
         party_tab_index = social_tab_count;
@@ -378,7 +379,7 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
         }
     } else if (mud->ui_tab_social_sub_tab == clan_tab_index &&
                !mud->orsc_clan_in && mud->orsc_clan_browse_count > 0) {
-        // clan browse results with their join-setting colours
+        // clan browse results with join-setting colours (@gr2@/@yel@/@red@)
         for (int i = 0; i < mud->orsc_clan_browse_count; i++) {
             char *colour = mud->orsc_clan_browse_can_join[i] == 0
                                ? "@gr2@"
@@ -395,6 +396,27 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
 
             panel_add_list_entry(mud->panel_social_list,
                                  mud->control_list_social, i, formatted_clan);
+        }
+    } else if (mud->ui_tab_social_sub_tab == party_tab_index &&
+               !mud->orsc_party_in && mud->orsc_party_browse_count > 0) {
+        // party browse results: join setting takes the clan list colours
+        for (int i = 0; i < mud->orsc_party_browse_count; i++) {
+            char *colour = mud->orsc_party_browse_can_join[i] == 0
+                               ? "@gr2@"
+                               : (mud->orsc_party_browse_can_join[i] == 1
+                                      ? "@yel@"
+                                      : "@red@");
+
+            char formatted_party[96] = {0};
+
+            sprintf(formatted_party, "%sParty %d - %d members - %d points",
+                    colour, mud->orsc_party_browse_ids[i],
+                    mud->orsc_party_browse_members[i],
+                    mud->orsc_party_browse_points[i]);
+
+            panel_add_list_entry(mud->panel_social_list,
+                                 mud->control_list_social, i,
+                                 formatted_party);
         }
     } else if (mud->ui_tab_social_sub_tab == party_tab_index &&
                mud->orsc_party_in) {
@@ -446,9 +468,19 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
     if (is_touch) {
         handle_panel_input_early = 1;
 
-        panel_handle_mouse(mud->panel_social_list, mudclient_finger_1_x,
-                           mudclient_finger_1_y, mud->last_mouse_button_down,
-                           mudclient_finger_1_down, mud->mouse_scroll_delta);
+        /* feed the live finger while one is down, else the stick cursor + its
+         * button, so the scrollbar drags by BOTH touch and joystick+X (a held
+         * finger never raises mouse_button_down) */
+        int px = mud->mouse_x, py = mud->mouse_y, pdown = mud->mouse_button_down;
+        if (mudclient_finger_1_down) {
+            px = mudclient_finger_1_x;
+            py = mudclient_finger_1_y;
+            pdown = 1;
+        }
+
+        panel_handle_mouse(mud->panel_social_list, px, py,
+                           mud->last_mouse_button_down, pdown,
+                           mud->mouse_scroll_delta);
     }
 #endif
 
@@ -574,8 +606,8 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
             snprintf(formatted, SURFACE_STRING_MAX, "You are not in a %s",
                      is_clan ? "clan" : "party");
 
-            // clanless: find zone requests the browse list, click to join
-            if (is_clan) {
+            // clanless/partyless: the Find zone requests the browse list, click a row to join
+            {
                 int find_colour =
                     mud->mouse_x > ui_x + SOCIAL_WIDTH - 48 &&
                             mud->mouse_x < ui_x + SOCIAL_WIDTH &&
@@ -591,8 +623,7 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
 
         surface_draw_string_centre(
             mud->surface, formatted,
-            ui_x + (in_group || is_clan ? (SOCIAL_WIDTH - 48) / 2
-                                        : SOCIAL_WIDTH / 2),
+            ui_x + (SOCIAL_WIDTH - 48) / 2,
             ui_y + 35, FONT_BOLD_12, WHITE);
 
         int text_colour = WHITE;
@@ -754,8 +785,7 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
     if (mud->protocol_custom && mud->ui_tab_social_sub_tab == party_tab_index &&
         mud->orsc_party_in && mouse_y > 25 && mouse_y < 40 &&
         mouse_x < SOCIAL_WIDTH - 48) {
-        // per-player share toggles shown first, available to every member
-        // (custom worlds only, the SP server has no share commands)
+        // per-player share toggles first, available to every member (custom worlds only)
         static const char *share_names[2] = {"Toggle loot share",
                                              "Toggle XP share"};
 
@@ -768,7 +798,7 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
             mud->menu_items_count++;
         }
 
-        // party settings shown for the leader only
+        // party settings (kick/invite rank menus), leader only
         if (mud->orsc_party_is_leader) {
             static const char *party_setting_names[2] = {"Kick rank",
                                                          "Invite rank"};
@@ -835,6 +865,15 @@ void mudclient_draw_ui_tab_social(mudclient *mud, int no_menus) {
             snprintf(join_command, sizeof(join_command), "joinclan %s",
                      mud->orsc_clan_browse_names[browse_index]);
             mudclient_send_command_string(mud, join_command);
+        }
+    }
+
+    if (mud->mouse_button_click == 1 &&
+        mud->ui_tab_social_sub_tab == party_tab_index && !mud->orsc_party_in) {
+        // Find zone requests the party list
+        if (mouse_x > SOCIAL_WIDTH - 48 && mouse_y > 25 && mouse_y < 40) {
+            mudclient_orsc_send_party_action(
+                mud, PARTY_OPTION_SEND_PARTY_INFO, NULL);
         }
     }
 
@@ -1002,7 +1041,7 @@ void mudclient_draw_social_input(mudclient *mud) {
 
 #ifndef REVISION_177
             if (mud->protocol_custom) {
-                // custom private message keys the recipient by name, huffman body
+                // custom keys the recipient by name and huffman-codes the body
                 char target[MAX_USER_LENGTH + 1] = {0};
                 decode_username(mud->private_message_target, target);
 
@@ -1024,7 +1063,7 @@ void mudclient_draw_social_input(mudclient *mud) {
             char formatted_message[USERNAME_LENGTH + strlen(decoded_message) +
                                    17];
 
-            // custom worlds echo sent PMs back (opcode 87) and only that renders, so a rejected send shows nothing;
+            // custom worlds echo sent PMs back (opcode 87) and render only that;
             // everywhere else the local echo is the only feedback
             if (!mud->protocol_custom) {
                 sprintf(formatted_message, "@pri@You tell %s: %s", target_name,
@@ -1158,7 +1197,7 @@ void mudclient_draw_social_input(mudclient *mud) {
         char *username = mud->input_text_final;
 
         if (username[0] != '\0') {
-            // INVITE_PLAYER_OR_MAKE: also creates the party when not in one
+            // INVITE_PLAYER_OR_MAKE also creates the party when not in one
             mudclient_orsc_send_party_action(
                 mud, PARTY_OPTION_INVITE_PLAYER_OR_MAKE, username);
 
@@ -1186,16 +1225,15 @@ void mudclient_draw_social_input(mudclient *mud) {
 }
 
 #ifndef REVISION_177
-// the always-on-screen party box: per member a name-level line, a 100x4 hp bar (green hidden for ~500 frames
-// after damage), skull and leader-crown icons, and a Party button opening the party view. fixed at the
-// reference position; the combat/damage icons are custom GUI sprites this port doesn't carry
+// always-on-screen party box: per member a name/level line, a 100x4 hp bar
+// (hidden for ~500 frames after damage), skull and leader-crown icons, a Party button
 void mudclient_draw_party_hud(mudclient *mud) {
     if ((!mud->protocol_custom && !MUD_SP_WIRE(mud)) || !mud->orsc_party_in ||
         mud->orsc_party_size <= 0) {
         return;
     }
 
-    // the touch dialogue options render in the same left band; step aside while a conversation menu is up
+    // touch dialogue options render in the same left band; step aside while a menu is up
     if (mudclient_is_touch(mud) && mud->show_option_menu) {
         return;
     }
@@ -1203,8 +1241,8 @@ void mudclient_draw_party_hud(mudclient *mud) {
     int x = (mud->surface->width - 175) / 20;
 
 #if defined(__vita__) && defined(RENDER_GL)
-    // the vita touch layout owns the top left (chat to ~120) and lower left (side menu from 300); the party
-    // box takes the free band between them, a full party ending ~250
+    // vita touch layout owns the top-left and lower-left, so the party box
+    // takes the free band between them (button at 128, rows from 150)
     int y = 150;
 #else
     int y = mud->surface->height - 310;
@@ -1220,7 +1258,7 @@ void mudclient_draw_party_hud(mudclient *mud) {
         text_x = 2;
     }
 
-    // row 0's icons start at y - 6, so the button ends at y - 7
+    // the Party button above the rows (row 0's icons start at y - 6)
     int button_x = x + 20;
     int button_y = y - 22;
 
@@ -1234,9 +1272,12 @@ void mudclient_draw_party_hud(mudclient *mud) {
         mud->mouse_x <= button_x + 75 && mud->mouse_y >= button_y &&
         mud->mouse_y <= button_y + 15) {
         mud->show_ui_tab = SOCIAL_TAB;
-        // the Clan tab only precedes Party on custom worlds
+        // Clan precedes Party whenever the Clan tab is shown
         mud->ui_tab_social_sub_tab =
-            2 + ((mud->protocol_custom && mud->orsc.want_clans) ? 1 : 0);
+            2 + (((mud->protocol_custom && mud->orsc.want_clans) ||
+                  MUD_SP_WIRE(mud))
+                     ? 1
+                     : 0);
         mud->mouse_button_click = 0;
     }
 

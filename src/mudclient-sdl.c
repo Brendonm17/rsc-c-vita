@@ -12,13 +12,13 @@ static uint8_t switch_mouse_button = 1;
 #ifdef __vita__
 #include <math.h>
 
-// frame gap (ms) past which a delay counts as suspend/resume
+// a frame gap longer than this (ms) means the console slept; treated as resume-from-suspend
 #define VITA_SUSPEND_MS 5000
 
-// stick deflection (out of 32767) that counts as pushed
+// stick deflection (out of 32767) past which a stick counts as pushed
 #define VITA_STICK_DEAD_ZONE 12000
 
-// left-stick walk target: tiles ahead, and reissue threshold in tiles
+// left-stick walk target: tiles ahead, and the reissue threshold in tiles
 #define VITA_WALK_TILES 16
 #define VITA_WALK_REISSUE 3
 
@@ -29,18 +29,18 @@ static uint8_t switch_mouse_button = 1;
 static int vita_left_stick_x = 0;
 static int vita_left_stick_y = 0;
 
-// virtual mouse cursor position (sub-pixel) driven by the left stick
+// virtual-mouse cursor (sub-pixel) driven by the left stick
 #define VITA_CURSOR_MAX_SPEED 14.0f
 static float vita_cursor_x = -1.0f;
 static float vita_cursor_y = -1.0f;
 
-// analog dead zone (0-32767) as a percent of full deflection
+// runtime analog dead zone (out of 32767) as a percent of full deflection
 static int vita_deadzone(mudclient *mud) {
     return mud->options->vita_stick_deadzone * 327;
 }
 
-// d-pad held direction (-1/0/+1 per axis); nudges the cursor each frame
-#define VITA_DPAD_CURSOR_SPEED 5.0f
+// d-pad held direction (-1/0/+1 per axis) nudges the cursor each frame, at half the stick's speed
+#define VITA_DPAD_SPEED_RATIO 0.5f
 static int vita_dpad_x = 0;
 static int vita_dpad_y = 0;
 
@@ -87,8 +87,7 @@ static void vita_move_cursor(mudclient *mud) {
     static int last_set_y = -1;
 
     // hold the cursor still while a click waits for this frame's hit tests
-    // (pressing the button jostles the stick); bounded so an unconsumed
-    // click cannot park the stick
+    // (pressing the button jostles the stick); bounded so a click can't park it
     static int click_hold_frames = 0;
 
     if (mud->mouse_button_click != 0) {
@@ -130,9 +129,10 @@ static void vita_move_cursor(mudclient *mud) {
     vita_cursor_x += nx * fabsf(nx) * speed;
     vita_cursor_y += ny * fabsf(ny) * speed;
 
-    // d-pad nudges the cursor at a steady speed while held
-    vita_cursor_x += vita_dpad_x * VITA_DPAD_CURSOR_SPEED;
-    vita_cursor_y += vita_dpad_y * VITA_DPAD_CURSOR_SPEED;
+    // d-pad nudges the cursor at a steady half-stick speed while held
+    float dpad_speed = speed * VITA_DPAD_SPEED_RATIO;
+    vita_cursor_x += vita_dpad_x * dpad_speed;
+    vita_cursor_y += vita_dpad_y * dpad_speed;
 
     if (vita_cursor_x < 0.0f) {
         vita_cursor_x = 0.0f;
@@ -169,7 +169,7 @@ static int64_t mudclient_finger_2_id = 0;
 
 void mudclient_poll_events(mudclient *mud) {
 #ifdef __vita__
-    // resume from suspend: a large frame gap means the connection died; drop it like a normal disconnect
+    // resume from suspend: a large frame gap means the connection died; drop it like a disconnect
     {
         static int vita_prev_ticks = 0;
         static int vita_prev_logged_in = 0;
@@ -199,7 +199,9 @@ void mudclient_poll_events(mudclient *mud) {
         vita_prev_ticks = get_ticks();
     }
 
-    // on-screen keyboard is non-modal; game keeps running underneath
+    /* Drive the non-modal on-screen keyboard. While it is open the game beneath
+     * keeps running (so the connection stays alive) but must not also act on the
+     * touches/buttons aimed at the keyboard. */
     if (vita_ime_is_active()) {
         vita_ime_poll(mud);
         SDL_PumpEvents();
@@ -208,8 +210,7 @@ void mudclient_poll_events(mudclient *mud) {
     }
 #endif
 
-    // guides have no right-click use; a held scrollbar thumb would sail
-    // past the menu delay and pop the context menu mid-drag
+    // guides have no right-click use; a held scrollbar thumb would sail past the menu delay
     if (!mudclient_has_right_clicked && !mudclient_horizontal_drag &&
         !mudclient_vertical_drag && mudclient_finger_1_down &&
         !mudclient_finger_2_down && !mudclient_guides_visible(mud) &&
@@ -341,8 +342,7 @@ void mudclient_poll_events(mudclient *mud) {
                 int delta_x = touch_x - mudclient_touch_start_x;
                 int delta_y = touch_y - mudclient_touch_start_y;
 
-                // a guide window owns its own scrolling; camera rotation
-                // and drag-zoom would fight the scrollbar thumb
+                // a guide window owns its own scrolling; camera rotation and drag-zoom would fight it
                 if (!mudclient_horizontal_drag && abs(delta_x) > 30 &&
                     !mudclient_guides_visible(mud)) {
                     mudclient_horizontal_drag = 1;
@@ -463,8 +463,7 @@ void mudclient_poll_events(mudclient *mud) {
                 if (!mudclient_has_right_clicked && !mudclient_vertical_drag &&
                     !mudclient_horizontal_drag &&
                     mudclient_pinch_distance == 0) {
-                    // click where the finger LANDED; lifting rolls the
-                    // reported point up a few pixels
+                    // click where the finger landed; lifting rolls the reported point up a few pixels
                     mudclient_mouse_pressed(mud, mudclient_touch_start_x,
                                             mudclient_touch_start_y, 0);
                     mudclient_mouse_released(mud, mudclient_touch_start_x,
@@ -650,7 +649,7 @@ void mudclient_poll_events(mudclient *mud) {
                 mudclient_mouse_pressed(mud, mud->mouse_x, mud->mouse_y, 3);
                 mudclient_mouse_released(mud, mud->mouse_x, mud->mouse_y, 3);
                 break;
-            // select and start are unmapped; the on-screen keyboard opens automatically when a text field is focused
+            // select and start are unmapped; the on-screen keyboard opens when a field is focused
             case 6: // D-pad Down -> nudge cursor down
                 vita_dpad_y = 1;
                 break;
@@ -695,8 +694,7 @@ void mudclient_poll_events(mudclient *mud) {
         case SDL_JOYAXISMOTION: {
             int axis = event.jaxis.axis;
 
-            // left stick (axes 0/1) moves the cursor; right stick (axes
-            // 2/3) rotates/zooms the camera. axes 4/5 are ignored
+            // left stick (axes 0/1) moves the cursor; right stick (axes 2/3) rotates/zooms; axes 4/5 ignored
             if (axis == 0) {
                 vita_left_stick_x = event.jaxis.value;
                 break;

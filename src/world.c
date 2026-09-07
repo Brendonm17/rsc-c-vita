@@ -22,18 +22,7 @@ static int world_has_neighbouring_roof(World *, int, int);
 static void world_raise_wall_object(World *, int, int, int, int, int);
 static void world_create_wall(World *, GameModel *, int, int, int, int, int);
 
-// plane-0 quadrant arrays captured right after decode+fill
-static struct {
-    int8_t terrain_height[PLANE_COUNT][TILE_COUNT];
-    int8_t terrain_colour[PLANE_COUNT][TILE_COUNT];
-    int8_t walls_north_south[PLANE_COUNT][TILE_COUNT];
-    int8_t walls_east_west[PLANE_COUNT][TILE_COUNT];
-    uint16_t walls_diagonal[PLANE_COUNT][TILE_COUNT];
-    int8_t walls_roof[PLANE_COUNT][TILE_COUNT];
-    int8_t tile_decoration[PLANE_COUNT][TILE_COUNT];
-    int8_t tile_direction[PLANE_COUNT][TILE_COUNT];
-    int valid;
-} ground_snapshot;
+// the plane-0 capture lives in World->ground_snapshot (world.h), per world
 static void world_update_shadow_rect(World *, int, int, int, int);
 static void world_vertex_shadow(World *, int, int, int);
 static int world_get_tile_type(World *, int, int);
@@ -69,7 +58,7 @@ void world_new(World *world, Scene *scene, Surface *surface, int version) {
     world->surface = surface;
     world->player_alive = 0;
     world->version = version;
-    // default on (embedded SP / co-op); online paths set it explicitly at login and config parse
+    // default on (embedded SP / co-op); online paths set it at login and config parse
     world->apply_custom_landscape = 1;
 }
 
@@ -429,8 +418,7 @@ static void world_load_section_files(World *world, int x, int y, int plane,
     size_t len = 0;
     uint8_t *map_data;
 
-    // additive rune-island terrain; (x, y) are absolute sector numbers like maps63 (sx from 48); rune sectors are sx
-    // 62-69
+    // additive rune-island terrain; (x, y) are absolute sector numbers, rune sectors are sx 62-69
     if (world->apply_custom_landscape &&
         custom_rune_landscape_fill(
             plane, x, y, world->terrain_height[chunk], world->terrain_colour[chunk],
@@ -440,8 +428,7 @@ static void world_load_section_files(World *world, int x, int y, int plane,
         return;
     }
 
-    // additive OpenRSC custom-map terrain (sectors that differ from Authentic_Landscape.orsc); same numbering as
-    // maps63; a listed sector reproduces Custom_Landscape.orsc 1:1
+    // additive OpenRSC custom-map terrain; a listed sector reproduces Custom_Landscape.orsc 1:1
     if (world->apply_custom_landscape &&
         custom_maps_landscape_fill(
             plane, x, y, world->terrain_height[chunk], world->terrain_colour[chunk],
@@ -753,8 +740,8 @@ static int world_get_terrain_colour(World *world, int x, int y) {
     return get_byte_plane_coord(world->terrain_colour, x, y);
 }
 
-// free built models without touching any scene; start_index walks the 576 slots; returns the next index, or -1 when
-// all up to limit were freed
+// free built models without touching any scene; start_index walks the 576
+// slots, returns the next index or -1 when all up to the limit were freed
 int world_free_models_step(World *world, int start_index, int max_slots) {
     int total = TERRAIN_COUNT * (1 + PLANE_COUNT * 2);
     int index = start_index;
@@ -876,8 +863,7 @@ int world_get_tile_direction(World *world, int x, int y) {
     return get_byte_plane_coord(world->tile_direction, x, y);
 }
 
-// mirror of get_byte_plane_coord's (x, y) -> (plane, index) mapping, but assigning; out-of-region coords are dropped
-// silently
+// mirror of get_byte_plane_coord's mapping, but assigning; out-of-region coords dropped silently
 void world_set_tile_direction(World *world, int x, int y, int direction) {
     if (x < 0 || x >= REGION_WIDTH || y < 0 || y >= REGION_HEIGHT) {
         return;
@@ -1147,23 +1133,23 @@ static void world_load_assemble(World *world, int x, int y, int plane,
     world_fill_edges(world);
 
     if (plane == 0 && is_current_plane) {
-        memcpy(ground_snapshot.terrain_height, world->terrain_height,
+        memcpy(world->ground_snapshot.terrain_height, world->terrain_height,
                sizeof(world->terrain_height));
-        memcpy(ground_snapshot.terrain_colour, world->terrain_colour,
+        memcpy(world->ground_snapshot.terrain_colour, world->terrain_colour,
                sizeof(world->terrain_colour));
-        memcpy(ground_snapshot.walls_north_south, world->walls_north_south,
+        memcpy(world->ground_snapshot.walls_north_south, world->walls_north_south,
                sizeof(world->walls_north_south));
-        memcpy(ground_snapshot.walls_east_west, world->walls_east_west,
+        memcpy(world->ground_snapshot.walls_east_west, world->walls_east_west,
                sizeof(world->walls_east_west));
-        memcpy(ground_snapshot.walls_diagonal, world->walls_diagonal,
+        memcpy(world->ground_snapshot.walls_diagonal, world->walls_diagonal,
                sizeof(world->walls_diagonal));
-        memcpy(ground_snapshot.walls_roof, world->walls_roof,
+        memcpy(world->ground_snapshot.walls_roof, world->walls_roof,
                sizeof(world->walls_roof));
-        memcpy(ground_snapshot.tile_decoration, world->tile_decoration,
+        memcpy(world->ground_snapshot.tile_decoration, world->tile_decoration,
                sizeof(world->tile_decoration));
-        memcpy(ground_snapshot.tile_direction, world->tile_direction,
+        memcpy(world->ground_snapshot.tile_direction, world->tile_direction,
                sizeof(world->tile_direction));
-        ground_snapshot.valid = 1;
+        world->ground_snapshot.valid = 1;
     }
 
     if (world->parent_model == NULL) {
@@ -1237,7 +1223,7 @@ static void world_load_assemble(World *world, int x, int y, int plane,
                 int vertex_index = game_model_vertex_at(
                     game_model, r_x * TILE_SIZE, height, r_y * TILE_SIZE);
 
-                // per-vertex lighting jitter derived from the tile position, range -5..+4
+                // per-vertex lighting jitter from the tile position, range -5..+4
                 unsigned int h = (unsigned int)r_x * 73856093u ^
                                  (unsigned int)r_y * 19349663u;
                 int ambience = (int)(h % 10u) - 5;
@@ -2580,22 +2566,22 @@ void world_load_section(World *world, int x, int y, int plane) {
         world_load_assemble(world, x, y, 2, 0);
 
         // restore ground-floor data from the snapshot taken after decode+fill
-        if (ground_snapshot.valid) {
-            memcpy(world->terrain_height, ground_snapshot.terrain_height,
+        if (world->ground_snapshot.valid) {
+            memcpy(world->terrain_height, world->ground_snapshot.terrain_height,
                    sizeof(world->terrain_height));
-            memcpy(world->terrain_colour, ground_snapshot.terrain_colour,
+            memcpy(world->terrain_colour, world->ground_snapshot.terrain_colour,
                    sizeof(world->terrain_colour));
-            memcpy(world->walls_north_south, ground_snapshot.walls_north_south,
+            memcpy(world->walls_north_south, world->ground_snapshot.walls_north_south,
                    sizeof(world->walls_north_south));
-            memcpy(world->walls_east_west, ground_snapshot.walls_east_west,
+            memcpy(world->walls_east_west, world->ground_snapshot.walls_east_west,
                    sizeof(world->walls_east_west));
-            memcpy(world->walls_diagonal, ground_snapshot.walls_diagonal,
+            memcpy(world->walls_diagonal, world->ground_snapshot.walls_diagonal,
                    sizeof(world->walls_diagonal));
-            memcpy(world->walls_roof, ground_snapshot.walls_roof,
+            memcpy(world->walls_roof, world->ground_snapshot.walls_roof,
                    sizeof(world->walls_roof));
-            memcpy(world->tile_decoration, ground_snapshot.tile_decoration,
+            memcpy(world->tile_decoration, world->ground_snapshot.tile_decoration,
                    sizeof(world->tile_decoration));
-            memcpy(world->tile_direction, ground_snapshot.tile_direction,
+            memcpy(world->tile_direction, world->ground_snapshot.tile_direction,
                    sizeof(world->tile_direction));
         } else {
             world_load_section_files(world, section_x - 1, section_y - 1,
@@ -2616,8 +2602,8 @@ void world_load_section(World *world, int x, int y, int plane) {
     world->parent_model = NULL;
 }
 
-// replay the live-side effects world_load_section skipped: scene registration of every built model, then minimap
-// texture upload and blit; run before world_gl_buffer_world_models
+// replay the live-side effects world_load_section skipped: scene registration
+// of every built model, then the minimap upload and blit
 void world_load_section_commit(World *world) {
     if (!world->defer_scene_adds) {
         return;
@@ -2754,7 +2740,7 @@ void world_gl_create_world_models_buffer(World *world, int max_models) {
     world->gl_world_models_offset = 0;
 }
 
-// merge-class key for buffer-layout grouping: sidedness classification, transparency, lighting uniforms
+// merge-class key for buffer grouping: sidedness, transparency, lighting uniforms
 static int world_gl_model_class_less(const GameModel *a, const GameModel *b) {
     int ka = (a->gl_all_back_only << 1) | a->gl_all_front_only;
     int kb = (b->gl_all_back_only << 1) | b->gl_all_front_only;
@@ -2783,8 +2769,8 @@ void world_gl_buffer_world_models_to(World *world,
                                      int *buffers_length, int deferred) {
     int count = world->gl_world_models_offset;
 
-    // sort a scratch copy by the merge key so equal-class models pack contiguously; only the EBO/VBO layout order
-    // changes
+    // sort a scratch copy by the merge key so equal-class models pack
+    // contiguously; only the EBO/VBO layout order changes
     GameModel **sorted = malloc(sizeof(GameModel *) * (count > 0 ? count : 1));
 
     if (sorted != NULL) {
@@ -2821,14 +2807,10 @@ void world_gl_buffer_world_models(World *world) {
                                     &world->scene->gl_terrain_buffer_length,
                                     0);
 
-    free(world->gl_world_models_buffer);
-
-    world->gl_world_models_buffer = NULL;
-    world->gl_world_models_offset = 0;
+    // keep the model list; the region cache re-adds it to the scene when the player walks back
 }
 
-// patch the terrain buffers' CPU mirrors with fresh lighting; writes only the kept mirrors + dirty ranges, never GL;
-// world_gl_update_terrain_flush uploads
+// patch the terrain buffers' CPU mirrors with fresh lighting; writes mirrors + dirty ranges, never GL
 void world_gl_update_terrain_patch(World *world) {
     for (int i = 0; i < TERRAIN_COUNT; i++) {
         GameModel *game_model = world->terrain_models[i];
@@ -2858,8 +2840,7 @@ void world_gl_update_terrain_patch(World *world) {
                     game_model->vertex_intensity[vertex_index] +
                     game_model->vertex_ambience[vertex_index];
 
-                // packed int16 lighting { face_intensity, vertex_intensity }, matching gl_model_vertex.lighting; S16
-                // at offset 20 in the 40-byte vertex
+                // packed int16 lighting { face_intensity, vertex_intensity }; S16 at offset 20 in the 40-byte vertex
                 int16_t lighting[] = {(int16_t)(face_intensity),
                                       (int16_t)(vertex_intensity)};
 

@@ -1,4 +1,5 @@
-// Vita backend for sp-net.h: sceNet LAN, sceNetAdhoc PTP ad-hoc, NetCheckDialog join
+// Vita backend for sp-net.h: sceNet/sceNetCtl sockets for SPNET_MODE_LAN,
+// sceNetAdhoc* for SPNET_MODE_ADHOC; empty translation unit off __vita__
 #include "sp-net.h"
 
 #ifdef __vita__
@@ -224,7 +225,6 @@ static void adhoc_health_sweep(void) {
                         // only CLOSED means dead
                         if (p->state == SCE_NET_ADHOC_PTP_STATE_CLOSED) {
                             c->state = -1;
-                            fprintf(stderr, "[spnet] peer conn %d CLOSED (PtpStat)\n", i);
                         }
                         break;
                     }
@@ -671,11 +671,8 @@ static int lan_connect(const char *address) {
 
 // refresh g_own_mac before every socket create
 static void adhoc_refresh_own_mac(const char *who) {
-    int r = sceNetAdhocctlGetEtherAddr(&g_own_mac);
-    char mac_str[32];
-    sceNetEtherNtostr(&g_own_mac, mac_str, sizeof(mac_str));
-    fprintf(stderr, "[spnet] %s: own mac=%s (GetEtherAddr=0x%08x)\n",
-            who ? who : "socket", mac_str, (unsigned)r);
+    (void)who;
+    (void)sceNetAdhocctlGetEtherAddr(&g_own_mac);
 }
 
 static void adhoc_pdp_open(void) {
@@ -866,7 +863,6 @@ static void pump_adhoc_dialog(void) {
     }
 
     g_adhoc_connected = 1;
-    fprintf(stderr, "[spnet] CONN dialog OK -> on ad-hoc network; opening sockets\n");
 
     // every socket create re-fetches g_own_mac first
     adhoc_pdp_open(); // discovery channel: host answers, guest queries
@@ -1075,13 +1071,8 @@ static int adhoc_init(void) {
     g_adhoc_ctl_up = 1;
 
     // fetch the device's own adapter MAC (self address); never abort on failure
-    {
-        ret = sceNetAdhocctlGetEtherAddr(&g_own_mac);
-        char mac_str[32];
-        sceNetEtherNtostr(&g_own_mac, mac_str, sizeof(mac_str));
-        fprintf(stderr, "[spnet] pre-dialog mac=%s (GetEtherAddr=0x%08x)\n",
-                mac_str, (unsigned)ret);
-    }
+    ret = sceNetAdhocctlGetEtherAddr(&g_own_mac);
+    (void)ret;
 
     g_dialog_open = 0;
     g_adhoc_connected = 0;
@@ -1168,23 +1159,13 @@ void spnet_shutdown(void) {
     // full ad-hoc teardown; the shared LAN sceNet stack is never terminated
     if (was_adhoc) {
         // leave the system ad-hoc network the CONN dialog joined
-        int adc = sceNetCtlAdhocDisconnect();
-        int actlt = 0, adt = 0;
-        if (g_adhoc_ctl_up) { actlt = sceNetAdhocctlTerm(); g_adhoc_ctl_up = 0; }
-        if (g_adhoc_up) { adt = sceNetAdhocTerm(); g_adhoc_up = 0; }
-        fprintf(stderr, "[spnet] leave ad-hoc: AdhocDisconnect=0x%08x "
-                        "adhocctlTerm=0x%08x adhocTerm=0x%08x\n",
-                (unsigned)adc, (unsigned)actlt, (unsigned)adt);
+        (void)sceNetCtlAdhocDisconnect();
+        if (g_adhoc_ctl_up) { (void)sceNetAdhocctlTerm(); g_adhoc_ctl_up = 0; }
+        if (g_adhoc_up) { (void)sceNetAdhocTerm(); g_adhoc_up = 0; }
 
-        /* Radio is free now, but netctl's infra side stays at state=0 -- sceNetCtl
-         * has no reconnect call and sceNetCtlInit (which kicks the AP association)
-         * only ran at boot. Re-init netctl here on leaving ad-hoc to start
-         * re-associating while the player is in menus; vita_net_connected() on the
-         * online path re-checks and waits out the rest. */
+        // radio is free now; re-init netctl to start re-associating Wi-Fi while in menus
         sceNetCtlTerm(); // returns void
-        int nci = sceNetCtlInit();
-        fprintf(stderr, "[spnet] post-adhoc netctl reinit: Init=0x%08x "
-                        "(re-associating Wi-Fi infra)\n", (unsigned)nci);
+        (void)sceNetCtlInit();
     }
 
     g_scan_active = 0;

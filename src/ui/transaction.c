@@ -1,7 +1,7 @@
 #include "transaction.h"
 
 #ifndef REVISION_177
-// derives noted flag for merged trade offers from inventory holdings
+// noted flag for a merged offer id: 1 if the player holds that id in noted form
 static int transaction_offer_noted(mudclient *mud, int item_id) {
     for (int s = 0; s < mud->inventory_items_count; s++) {
         if (mud->inventory_item_id[s] == item_id && mudclient_item_noted(mud, s)) {
@@ -68,10 +68,17 @@ void mudclient_offer_transaction_item(mudclient *mud,
                 end = max;
             }
 
+#ifndef REVISION_177
+            // derive noted for own offer rows locally
+            int offered_noted = transaction_offer_noted(mud, item_id);
+#endif
             if (game_data.items[item_id].stackable == 1) {
                 for (int i = mud->transaction_item_count; i < end; i++) {
                     mud->transaction_items[i] = item_id;
                     mud->transaction_items_count[i] = 1;
+#ifndef REVISION_177
+                    mud->transaction_items_noted[i] = offered_noted;
+#endif
                     mud->transaction_item_count++;
                 }
             } else {
@@ -79,12 +86,20 @@ void mudclient_offer_transaction_item(mudclient *mud,
 
                 mud->transaction_items_count[mud->transaction_item_count] =
                     item_amount;
+#ifndef REVISION_177
+                mud->transaction_items_noted[mud->transaction_item_count] =
+                    offered_noted;
+#endif
 
                 mud->transaction_item_count++;
             }
         } else {
             mud->transaction_items[mud->transaction_item_count] = item_id;
             mud->transaction_items_count[mud->transaction_item_count] = 1;
+#ifndef REVISION_177
+            mud->transaction_items_noted[mud->transaction_item_count] =
+                transaction_offer_noted(mud, item_id);
+#endif
             mud->transaction_item_count++;
         }
 
@@ -105,7 +120,8 @@ void mudclient_offer_transaction_item(mudclient *mud,
                               mud->transaction_items_count[j]);
 
 #ifndef REVISION_177
-        if (mud->protocol_custom) {
+        if (mud->protocol_custom ||
+            (MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes)) {
             // 8 bytes/item on custom: id, amount, u16 noted
             packet_stream_put_short(
                 mud->packet_stream,
@@ -225,7 +241,7 @@ void mudclient_remove_transaction_item(mudclient *mud,
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // trailing u16 noted flag per item
+            // trailing u16 noted per item
             packet_stream_put_short(
                 mud->packet_stream,
                 transaction_offer_noted(mud, mud->transaction_items[i]));

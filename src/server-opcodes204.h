@@ -21,6 +21,7 @@ typedef enum {
     SERVER_FRIEND_STATUS_CHANGE = 149,
     SERVER_GAME_SETTINGS = 240,
     SERVER_IGNORE_LIST = 109,
+    SERVER_SERVER_CONFIGS = 19, // OpenRSC custom SEND_SERVER_CONFIGS
     SERVER_INVENTORY_ITEMS = 53,
     SERVER_INVENTORY_ITEM_REMOVE = 123,
     SERVER_INVENTORY_ITEM_UPDATE = 90,
@@ -65,7 +66,8 @@ typedef enum {
     SERVER_WELCOME = 182,
     SERVER_WORLD_INFO = 25,
 
-    // custom (client_version 10010) server->client opcodes, guarded on mud->protocol_custom
+    // custom (client_version 10010) server->client opcodes, guarded on
+    // mud->protocol_custom
     SERVER_EQUIPMENT = 254,
     SERVER_EQUIPMENT_UPDATE = 255,
     SERVER_COMBAT_STYLE = 129,
@@ -90,7 +92,7 @@ typedef enum {
     SERVER_BLACK_HOLE = 115,
     SERVER_UNLOCKED_APPEARANCES = 250,
     SERVER_ON_TUTORIAL = 111,
-    // an ignored player was renamed; update the ignore entry in place under the new name
+    // custom: an ignored player was renamed; update the ignore entry in place
     SERVER_IGNORE_RENAME = 237
 } ServerOpcode;
 

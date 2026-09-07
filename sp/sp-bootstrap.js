@@ -8,7 +8,8 @@
             .map((a) => {
                 try {
                     if (typeof a === "string") return a;
-                    if (a instanceof Error) return a.stack || a.message;
+                    // QuickJS's Error.stack is frames only, keep the message
+                    if (a instanceof Error) return (a.name || "Error") + ": " + a.message + (a.stack ? "\n" + a.stack : "");
                     return JSON.stringify(a);
                 } catch (e) {
                     return String(a);

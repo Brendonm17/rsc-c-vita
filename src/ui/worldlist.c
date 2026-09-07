@@ -1,10 +1,12 @@
 #include "worldlist.h"
 #include "login.h" // LOGIN_STAGE_WORLD
 #include <stdio.h>
+#include <time.h> // srand seed for Auto-create bot generation
 
 #ifdef WITH_SINGLEPLAYER
 #include "../singleplayer.h"
 #include "../sp-net.h"
+#include "bot-manager.h"
 #endif
 
 #ifdef EMSCRIPTEN
@@ -16,7 +18,7 @@
 // login protocol id, worlds.cfg column 6 (absent/unknown = 177)
 #define PROTO_OPENRSC_177   0
 #define PROTO_AUTHENTIC_204 1
-#define PROTO_CUSTOM_10010  2 // Cabbage/Coleslaw custom content
+#define PROTO_CUSTOM_10010  2   // OpenRSC custom worlds (Cabbage/Coleslaw)
 
 struct server_type {
     char name[32];
@@ -24,8 +26,8 @@ struct server_type {
     int port;
     char rsa_exponent[512];
     char rsa_modulus[512];
-    int protocol; // PROTO_* value, worlds.cfg column 6
-    char content[32]; // content-pack id, worlds.cfg column 7
+    int protocol;      // PROTO_* value, worlds.cfg column 6
+    char content[32];  // content-pack id, worlds.cfg column 7
 };
 
 static struct server_type list[256] = {0};
@@ -169,31 +171,31 @@ struct sp_world_type {
     char name[48];
     int xp_rate;
     int members;
-    int fatigue; // 1 = fatigue on (classic), 0 = no fatigue
+    int fatigue;        // 1 = fatigue on (classic), 0 = no fatigue
     int remember_style; // 1 = remember last combat style between logins
-    int game_speed; // tick multiplier: 1 authentic, 2 double
-    int custom_quests; // 1 = OpenRSC custom quests enabled
+    int game_speed;     // tick multiplier: 1 authentic, 2 double
+    int custom_quests;  // 1 = OpenRSC custom quests enabled
     int holiday_events; // 1 = holiday events enabled
 
     // feature toggles, applied at the next server boot
-    int tutorial_island; // tutorialIsland
-    int skillcape_perks; // wantSkillcapePerks
-    int combat_odyssey; // wantCombatOdyssey
-    int poison_npcs; // wantPoisonNpcs
-    int leftclick_webs; // wantLeftclickWebs (no editor row)
-    int guild_greetings; // wantMissingGuildGreetings
-    int faster_yohnus; // fasterYohnus
-    int uses_classes; // usesClasses gates the Class selector
-    int spawn_ironman; // spawnIronMan gates the Mode selector
+    int tutorial_island;    // tutorialIsland
+    int skillcape_perks;    // wantSkillcapePerks
+    int combat_odyssey;     // wantCombatOdyssey
+    int poison_npcs;        // wantPoisonNpcs
+    int leftclick_webs;     // wantLeftclickWebs (no editor row)
+    int guild_greetings;    // wantMissingGuildGreetings
+    int faster_yohnus;      // fasterYohnus
+    int uses_classes;       // usesClasses gates the Class selector
+    int spawn_ironman;      // spawnIronMan gates the Mode selector
 
     // second set of feature toggles, same config.json key convention
-    int custom_firemaking; // customFiremaking
-    int better_jewelry_crafting; // wantBetterJewelryCrafting
-    int custom_leather; // wantCustomLeather
-    int new_rare_drop_tables; // wantNewRareDropTables
-    int npc_kill_messages; // npcKillMessages
-    int enchanted_crowns; // wantEnchantedCrowns
-    int batch_progression; // wantBatchProgression
+    int custom_firemaking;        // customFiremaking
+    int better_jewelry_crafting;  // wantBetterJewelryCrafting
+    int custom_leather;           // wantCustomLeather
+    int new_rare_drop_tables;     // wantNewRareDropTables
+    int npc_kill_messages;        // npcKillMessages
+    int enchanted_crowns;         // wantEnchantedCrowns
+    int batch_progression;        // wantBatchProgression
 
     // multiplayer host mode: 0 = offline, 1 = LAN, 2 = ad-hoc
     int net_mode;
@@ -430,7 +432,7 @@ static int sp_ec_title, sp_ec_name, sp_ec_xp_val, sp_ec_xp_prev, sp_ec_xp_next,
     sp_ec_fatigue_btn, sp_ec_remember_txt, sp_ec_remember_btn, sp_ec_quests_txt,
     sp_ec_quests_btn, sp_ec_holiday_txt, sp_ec_holiday_btn, sp_ec_save,
     sp_ec_cancel, sp_ec_delete, sp_ec_delete_bg, sp_ec_delete_txt;
-static int control_new_world = -1; // "+ New world" (world-list panel)
+static int control_new_world = -1;  // "+ New world" (world-list panel)
 static int control_edit_world = -1; // "Edit" (world-list panel)
 
 // editor pages: World / Content / Gameplay / Players, switched by tabs; each
@@ -439,16 +441,17 @@ static int sp_editor_page = 0; // 0 World, 1 Content, 2 Gameplay, 3 Players
 static int sp_editor_page1_start, sp_editor_page2_start, sp_editor_page2_end,
     sp_editor_page3_start, sp_editor_page3_end, sp_editor_page4_start,
     sp_editor_page4_end;
-static int sp_ec_tab_world, sp_ec_tab_world_txt;
-static int sp_ec_tab_content, sp_ec_tab_content_txt;
-static int sp_ec_tab_gameplay, sp_ec_tab_gameplay_txt;
-static int sp_ec_tab_players, sp_ec_tab_players_txt;
+static int sp_ec_tab_world, sp_ec_tab_world_txt, sp_ec_tab_world_bg;
+static int sp_ec_tab_content, sp_ec_tab_content_txt, sp_ec_tab_content_bg;
+static int sp_ec_tab_gameplay, sp_ec_tab_gameplay_txt, sp_ec_tab_gameplay_bg;
+static int sp_ec_tab_players, sp_ec_tab_players_txt, sp_ec_tab_players_bg;
 
 // Players page: account management for the world being edited
 #define SP_MAX_ACCOUNT_LIST 64
-static int sp_ec_players_list; // the scrollable username list
-static int sp_ec_players_header; // "Accounts (N):"
-static int sp_ec_players_delete; // delete-selected button
+static int sp_ec_players_list;    // the scrollable username list
+static int sp_ec_players_header;  // "Accounts (N):"
+static int sp_ec_players_delete;  // delete-selected button
+static int sp_ec_bots_btn;        // "Manage Bots" -> opens the bot-manager popup
 static int sp_ec_players_delete_txt;
 // usernames shown, indexed to match the list rows
 static char sp_account_names[SP_MAX_ACCOUNT_LIST][32];
@@ -540,7 +543,7 @@ static void sp_editor_add_toggle_row(Panel *panel, int cx, int y,
 
 static void worldlist_select_sp(mudclient *mud, int index);
 
-// UI label for a net_mode value (editor row + boot status).
+// UI label for a net_mode value (editor row + boot status)
 static const char *sp_net_mode_label(int m) {
     if (m == SP_NET_LAN) {
         return "LAN (WiFi)";
@@ -643,7 +646,7 @@ static void sp_editor_apply_preset(int everything) {
 static void sp_editor_build(mudclient *mud) {
     sp_editor_panel = malloc(sizeof(Panel));
     // 4 pages of rows plus the tab strip and action buttons
-    panel_new(sp_editor_panel, mud->surface, 180);
+    panel_new(sp_editor_panel, mud->surface, 256);
 
     int cx = mud->surface->width / 2;
     int cy = mud->surface->height / 2;
@@ -652,25 +655,29 @@ static void sp_editor_build(mudclient *mud) {
                                         FONT_BOLD_14, 1);
 
     // page tabs: World / Content / Gameplay / Players
-    panel_add_button_background(sp_editor_panel, cx - 150, cy - 128, 92, 18);
+    sp_ec_tab_world_bg =
+        panel_add_button_background(sp_editor_panel, cx - 150, cy - 128, 92, 18);
     sp_ec_tab_world_txt = panel_add_text_centre(
         sp_editor_panel, cx - 150, cy - 128, "@yel@World", FONT_BOLD_12, 0);
     sp_ec_tab_world =
         panel_add_button(sp_editor_panel, cx - 150, cy - 128, 92, 18);
 
-    panel_add_button_background(sp_editor_panel, cx - 50, cy - 128, 92, 18);
+    sp_ec_tab_content_bg =
+        panel_add_button_background(sp_editor_panel, cx - 50, cy - 128, 92, 18);
     sp_ec_tab_content_txt = panel_add_text_centre(
         sp_editor_panel, cx - 50, cy - 128, "@whi@Content", FONT_BOLD_12, 0);
     sp_ec_tab_content =
         panel_add_button(sp_editor_panel, cx - 50, cy - 128, 92, 18);
 
-    panel_add_button_background(sp_editor_panel, cx + 50, cy - 128, 92, 18);
+    sp_ec_tab_gameplay_bg =
+        panel_add_button_background(sp_editor_panel, cx + 50, cy - 128, 92, 18);
     sp_ec_tab_gameplay_txt = panel_add_text_centre(
         sp_editor_panel, cx + 50, cy - 128, "@whi@Gameplay", FONT_BOLD_12, 0);
     sp_ec_tab_gameplay =
         panel_add_button(sp_editor_panel, cx + 50, cy - 128, 92, 18);
 
-    panel_add_button_background(sp_editor_panel, cx + 150, cy - 128, 92, 18);
+    sp_ec_tab_players_bg =
+        panel_add_button_background(sp_editor_panel, cx + 150, cy - 128, 92, 18);
     sp_ec_tab_players_txt = panel_add_text_centre(
         sp_editor_panel, cx + 150, cy - 128, "@whi@Players", FONT_BOLD_12, 0);
     sp_ec_tab_players =
@@ -818,6 +825,12 @@ static void sp_editor_build(mudclient *mud) {
     sp_ec_players_delete =
         panel_add_button(sp_editor_panel, cx + 110, cy + 70, 120, 18);
 
+    // "Manage Bots" opens the bot-manager popup for this world (edit-mode only)
+    panel_add_button_background(sp_editor_panel, cx, cy + 94, 150, 18);
+    panel_add_text_centre(sp_editor_panel, cx, cy + 94, "Manage Bots...",
+                          FONT_BOLD_12, 0);
+    sp_ec_bots_btn = panel_add_button(sp_editor_panel, cx, cy + 94, 150, 18);
+
     sp_editor_page4_end = sp_editor_panel->control_count;
 
     // action buttons (shared across all pages)
@@ -880,6 +893,32 @@ static void worldlist_open_editor(mudclient *mud, int index) {
     sp_editor_panel->control_shown[sp_ec_delete_txt] = show_delete;
     sp_editor_panel->control_shown[sp_ec_tab_players] = show_delete;
     sp_editor_panel->control_shown[sp_ec_tab_players_txt] = show_delete;
+    sp_editor_panel->control_shown[sp_ec_tab_players_bg] = show_delete;
+    sp_editor_panel->control_shown[sp_ec_bots_btn] = show_delete;
+
+    // a new world has three tabs: centre them (100px spacing either way)
+    {
+        int cx = mud->surface->width / 2;
+        int x_edit[3] = {cx - 150, cx - 50, cx + 50};
+        int x_new[3] = {cx - 100, cx, cx + 100};
+        int *xs = show_delete ? x_edit : x_new;
+        int tabs[3][3] = {
+            {sp_ec_tab_world_bg, sp_ec_tab_world_txt, sp_ec_tab_world},
+            {sp_ec_tab_content_bg, sp_ec_tab_content_txt, sp_ec_tab_content},
+            {sp_ec_tab_gameplay_bg, sp_ec_tab_gameplay_txt, sp_ec_tab_gameplay}};
+
+        // backgrounds/buttons store their left edge, centred text stores its centre
+        for (int t = 0; t < 3; t++) {
+            int bg = tabs[t][0];
+            int txt = tabs[t][1];
+            int btn = tabs[t][2];
+            sp_editor_panel->control_x[bg] =
+                xs[t] - sp_editor_panel->control_width[bg] / 2;
+            sp_editor_panel->control_x[txt] = xs[t];
+            sp_editor_panel->control_x[btn] =
+                xs[t] - sp_editor_panel->control_width[btn] / 2;
+        }
+    }
 
     if (index >= 0 && index < sp_count) {
         sp_editor_xp = sp_list[index].xp_rate;
@@ -949,9 +988,25 @@ static void worldlist_open_editor(mudclient *mud, int index) {
 
 static void sp_editor_save(mudclient *mud) {
     char *typed = panel_get_text(sp_editor_panel, sp_ec_name);
+
+    // a world must have a name: refuse instead of silently saving "World"
+    {
+        int blank = 1;
+        for (int i = 0; typed != NULL && typed[i] != '\0'; i++) {
+            if (typed[i] != ' ' && typed[i] != '_') {
+                blank = 0;
+                break;
+            }
+        }
+        if (blank) {
+            panel_update_text(sp_editor_panel, sp_ec_title,
+                              "@red@Enter a name for the world first");
+            return;
+        }
+    }
+
     char name[48];
-    snprintf(name, sizeof(name), "%s",
-             (typed != NULL && typed[0] != '\0') ? typed : "World");
+    snprintf(name, sizeof(name), "%s", typed);
 
     if (sp_editor_index < 0) {
         if (sp_count < 64) {
@@ -1037,6 +1092,7 @@ static void sp_editor_delete(mudclient *mud) {
     sp_editor_shown = 0;
 }
 
+// the Bot Manager popup lives in bot-manager.c
 void worldlist_draw_editor(mudclient *mud) {
     if (!sp_editor_shown || sp_editor_panel == NULL) {
         return;
@@ -1044,13 +1100,22 @@ void worldlist_draw_editor(mudclient *mud) {
     int cx = mud->surface->width / 2;
     int cy = mud->surface->height / 2;
     // widened to 420 for the 4-tab strip + Players account list
-    surface_draw_box_alpha(mud->surface, cx - 210, cy - 170, 420, 340, 0, 220);
-    panel_draw_panel(sp_editor_panel);
+    // the Bot Manager popup covers the editor completely when open, so the
+    // editor's quads are not spent under it
+    if (!bot_manager_shown()) {
+        surface_draw_box_alpha(mud->surface, cx - 210, cy - 170, 420, 340, 0, 220);
+        panel_draw_panel(sp_editor_panel);
+    }
+    bot_manager_draw(mud);
 }
 
 // feeds a character into the editor's focused control (the Name box)
 void worldlist_handle_key(mudclient *mud, int key_code) {
     (void)mud;
+    // the Bot Manager popup's Name box takes keys while it's open
+    if (bot_manager_key(mud, key_code)) {
+        return;
+    }
     if (sp_editor_shown && sp_editor_panel != NULL) {
         panel_key_press(sp_editor_panel, key_code);
     }
@@ -1062,9 +1127,22 @@ static int worldlist_handle_editor(mudclient *mud) {
         return 0;
     }
 
-    panel_handle_mouse(sp_editor_panel, mud->mouse_x, mud->mouse_y,
-                       mud->last_mouse_button_down, mud->mouse_button_down,
-                       mud->mouse_scroll_delta);
+    // the Bot Manager popup, when open, sits over the editor and takes all input
+    if (bot_manager_shown()) {
+        return bot_manager_handle(mud);
+    }
+
+    {
+        // touch-aware feed, see the Bot Manager panel
+        int px = mud->mouse_x, py = mud->mouse_y, pdown = mud->mouse_button_down;
+        if (mudclient_is_touch(mud) && mudclient_finger_1_down) {
+            px = mudclient_finger_1_x;
+            py = mudclient_finger_1_y;
+            pdown = 1;
+        }
+        panel_handle_mouse(sp_editor_panel, px, py, mud->last_mouse_button_down,
+                           pdown, mud->mouse_scroll_delta);
+    }
 
     if (panel_is_clicked(sp_editor_panel, sp_ec_xp_prev)) {
         if (sp_editor_xp > 1) {
@@ -1106,6 +1184,11 @@ static int worldlist_handle_editor(mudclient *mud) {
         sp_editor_set_page(2);
     } else if (panel_is_clicked(sp_editor_panel, sp_ec_tab_players)) {
         sp_editor_set_page(3);
+    } else if (panel_is_clicked(sp_editor_panel, sp_ec_bots_btn)) {
+        // open the bot-manager popup for this (already-saved) world
+        if (sp_editor_index >= 0 && sp_editor_index < sp_count) {
+            bot_manager_open(mud, sp_list[sp_editor_index].id);
+        }
     } else if (panel_is_clicked(sp_editor_panel, sp_ec_players_list)) {
         // latches the clicked row; changing selection cancels delete-confirm
         int e = panel_get_list_entry_index(sp_editor_panel, sp_ec_players_list);
@@ -1204,7 +1287,7 @@ static int worldlist_handle_editor(mudclient *mud) {
 #ifdef WITH_SINGLEPLAYER
 // Join column: LAN/ad-hoc co-op; lazily inits spnet on first use
 static int spnet_mode_inited = 0;
-static spnet_mode join_mode = SPNET_MODE_LAN;
+static spnet_mode join_mode = SPNET_MODE_LAN; // default
 static int control_join_refresh = -1;
 static int control_join_mode = -1;
 static int control_join_mode_txt = -1;
@@ -1229,8 +1312,10 @@ static spnet_mode join_last_mode = SPNET_MODE_OFF;
 static char sp_selected_display_name[48] = "Single-player";
 // selected world's multiplayer host mode
 static int sp_selected_net_mode = SP_NET_OFFLINE;
+// selected world's id, so the boot touchpoint can re-read its current net_mode
+static char sp_selected_id[32] = "";
 
-// LAN comes up when the screen is shown (handle_mouse); ad-hoc only via the toggle
+// no-op placeholder kept for call-site stability (worldlist_join_tick)
 void worldlist_join_ensure_ready(void) {
     spnet_mode_inited = 1;
 }
@@ -1311,7 +1396,7 @@ static void worldlist_join_rebuild(mudclient *mud, spnet_status status,
 
 // pumps the transport, refreshes status line, rebuilds list on change
 static void worldlist_join_tick(mudclient *mud) {
-    join_ensure_mud = mud;
+    join_ensure_mud = mud; // see join_ensure_mud's declaration
     worldlist_join_ensure_ready();
     spnet_pump();
 
@@ -1353,12 +1438,10 @@ static void worldlist_select_join_scan(mudclient *mud, int scan_index) {
     snprintf(mud->server, sizeof(mud->server), "%s",
              join_scan_results[scan_index].name);
     mud->singleplayer = 0; // guest join, not the local embedded server
-    mud->protocol177 = 0; // guests speak the SP wire, not 177
+    mud->protocol177 = 0;  // guests speak the SP wire, not 177
     mud->protocol_custom = 0; // clear any prior custom-10010 selection
-    mud->port = 0; // spnet_address has the connection details
+    mud->port = 0;         // spnet_address has the connection details
 
-    printf("INFO: Selected LAN/ad-hoc world %s\n",
-          join_scan_results[scan_index].name);
 
     // a scanned co-op world has no persisted slot; last_world is untouched
 
@@ -1377,6 +1460,15 @@ const char *worldlist_selected_sp_display_name(void) {
 // brings co-op hosting up if the selected SP world opted into it
 void worldlist_boot_host_for_selected_world(void) {
     // skip re-init when the transport is already up in the target mode
+    // the world may have been edited since it was selected: use its current net_mode
+    for (int i = 0; i < sp_count; i++) {
+        if (sp_selected_id[0] != '\0' &&
+            strcmp(sp_list[i].id, sp_selected_id) == 0) {
+            sp_selected_net_mode = sp_list[i].net_mode;
+            break;
+        }
+    }
+
     spnet_status st = spnet_get_status();
     int already_up = (st != SPNET_STATUS_OFF && st != SPNET_STATUS_NO_NETWORK &&
                       st != SPNET_STATUS_ERROR);
@@ -1578,14 +1670,11 @@ static void worldlist_select(mudclient *mud, int index) {
     strcpy(mud->rsa_modulus, list[index].rsa_modulus);
 #ifdef WITH_SINGLEPLAYER
     mud->singleplayer = 0; // online worlds are never single-player
-    mud->spnet_guest = 0; // nor a scanned LAN/ad-hoc co-op guest join
+    mud->spnet_guest = 0;  // nor a scanned LAN/ad-hoc co-op guest join
 #endif
     // protocol177=1 for OpenRSC worlds (177 dialect), else the 204 path
     mud->protocol177 = (list[index].protocol == PROTO_OPENRSC_177);
     mud->protocol_custom = (list[index].protocol == PROTO_CUSTOM_10010);
-    printf("INFO: Changed world to %s (%s)\n", list[index].name,
-           mud->protocol_custom ? "custom-10010"
-                                : (mud->protocol177 ? "177" : "204"));
     mud->port = list[index].port;
 
     int world_changed = mud->options->last_world != index;
@@ -1615,16 +1704,20 @@ static void worldlist_select_sp(mudclient *mud, int index) {
     strcpy(mud->rsa_exponent, "00010001");
     strcpy(mud->rsa_modulus, OPENRSC_RSA_MODULUS);
     mud->singleplayer = 1;
-    mud->spnet_guest = 0; // an SP selection clears any guest join
+    mud->spnet_guest = 0;  // an SP selection clears any guest join
     mud->protocol177 = 0; // the embedded server speaks the 204 protocol
     mud->protocol_custom = 0; // not the custom 10010 dialect
+
+    // single-player always runs the full members game; members flag follows the pick
+    mud->options->members = 1;
 
     // for login.c's SP-boot host-enable touchpoint
     snprintf(sp_selected_display_name, sizeof(sp_selected_display_name), "%s",
              sp_list[index].name);
     sp_selected_net_mode = sp_list[index].net_mode;
+    snprintf(sp_selected_id, sizeof(sp_selected_id), "%s", sp_list[index].id);
     // apply this world's game rules + save folder
-    singleplayer_set_world_rules(sp_list[index].xp_rate, 1, // 1 = members
+    singleplayer_set_world_rules(sp_list[index].xp_rate, 1, // members
                                  sp_list[index].fatigue,
                                  sp_list[index].remember_style,
                                  sp_list[index].game_speed,
@@ -1649,7 +1742,6 @@ static void worldlist_select_sp(mudclient *mud, int index) {
     singleplayer_set_world(sp_list[index].id);
     mud->port = 0;
 
-    printf("INFO: Selected single-player world %s\n", sp_list[index].name);
 
     // last_world stores SP worlds as 1000+index to distinguish from online
     int stored = 1000 + index;
@@ -1678,7 +1770,7 @@ void worldlist_handle_mouse(mudclient *mud) {
     worldlist_join_tick(mud);
 
     if (worldlist_handle_editor(mud)) {
-        return; // editor popup open, consumes all input
+        return; // the editor popup is open and consumes all input
     }
 #endif
 

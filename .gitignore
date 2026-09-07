@@ -36,9 +36,12 @@ org.scape2003.mudclient/app/build/
 .DS_Store
 .vscode
 
-# vita build artifacts
+# build artifacts / generated (vita-port checkpoint)
 *.glo
 *.o
 *.psp2dmp
-sp/bundle-cache.bc
-sp/saves/
+sp/browser.bundle.js
+sp/*.cache
+
+*.bak2
+sp/browser.bundle.js.bak*

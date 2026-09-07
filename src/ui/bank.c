@@ -54,12 +54,12 @@ void mudclient_bank_transaction(mudclient *mud, int item_id, int amount,
 
 #ifndef REVISION_177
     if (mud->protocol_custom) {
-        // every deposit leads with the cert mode: uncert rows arm 1, plain deposits re-arm 0; withdraws never touch it
+        // every deposit leads with the cert mode: uncert rows arm 1, plain deposits re-arm 0
         if (!is_withdraw && mud->orsc.want_cert_deposit) {
             mudclient_bank_send_cert_mode(mud, mud->bank_offer_uncert);
         }
 
-        // custom bank packet: u16 item id, i32 amount, u8 noted
+        // custom bank packet: u16 item id, i32 amount, u8 noted (withdraw only, notes worlds)
         packet_stream_new_packet(mud->packet_stream, opcode);
         packet_stream_put_short(mud->packet_stream, item_id);
         packet_stream_put_int(mud->packet_stream, amount);
@@ -94,6 +94,12 @@ void mudclient_bank_transaction(mudclient *mud, int item_id, int amount,
                 packet_stream_put_int(mud->packet_stream,
                                       is_withdraw ? BANK_MAGIC_WITHDRAW
                                                   : BANK_MAGIC_DEPOSIT);
+            }
+
+            // SP/LAN wire: withdraw as a note when the world runs notes
+            if (is_withdraw && MUD_SP_WIRE(mud) && mud->orsc.want_bank_notes) {
+                packet_stream_put_byte(mud->packet_stream,
+                                       mud->bank_swap_note_mode ? 1 : 0);
             }
 #endif
 
@@ -726,7 +732,7 @@ void mudclient_draw_bank(mudclient *mud) {
                             mud->bank_last_withdraw_offer);
 
 #ifndef REVISION_177
-                        // equip a wearable item directly from the bank
+                        // equip a wearable item directly from the bank: u16 bank slot
                         if (mud->protocol_custom &&
                             mud->orsc.want_equipment_tab &&
                             game_data.items[selected_item_id].wearable != 0) {
@@ -905,7 +911,8 @@ void mudclient_draw_bank(mudclient *mud) {
                     mud->show_dialog_bank_preset = 1;
                     mud->bank_preset_selected_slot = 0;
                 }
-            } else if (mud->protocol_custom && mud->orsc.want_bank_notes &&
+            } else if ((mud->protocol_custom || MUD_SP_WIRE(mud)) &&
+                       mud->orsc.want_bank_notes &&
                        mouse_y <= 12 && mouse_x >= (bank_width - 318) &&
                        mouse_x < (bank_width - 284) &&
                        (bank_width - 318) > page_offset_x) {
@@ -1065,6 +1072,8 @@ void mudclient_draw_bank(mudclient *mud) {
                                   deposit_hot ? RED : WHITE);
     }
 
+    // no equipment deposit-all button; nowhere to place it in this title bar
+
 #ifndef REVISION_177
     // preset load buttons; saving happens in the preset viewer
     if (mud->protocol_custom && mud->orsc.want_bank_presets) {
@@ -1103,7 +1112,8 @@ void mudclient_draw_bank(mudclient *mud) {
     }
 
     // shows current withdraw mode: item or note
-    if (mud->protocol_custom && mud->orsc.want_bank_notes) {
+    if ((mud->protocol_custom || MUD_SP_WIRE(mud)) &&
+        mud->orsc.want_bank_notes) {
         int note_right = ui_x + bank_width - 284;
         int note_left = note_right - 34;
 

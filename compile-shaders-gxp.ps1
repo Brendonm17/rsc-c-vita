@@ -1,4 +1,4 @@
-# compile rsc-c's Cg shaders to GXP binaries for the Vita hardware renderer
+# Compile rsc-c's Cg shaders to GXP binaries for the Vita hardware renderer.
 $cgc = "C:\Vita\sdk\host_tools\bin\psp2cgc.exe"
 $env:Path = "C:\Vita\sdk\host_tools\bin;C:\Vita\sdk\host_tools\lib;" + $env:Path
 $cache = Join-Path $PSScriptRoot "cache"
@@ -17,9 +17,10 @@ foreach ($n in $vs) {
     else { Write-Host ("OK  {0,-16} fs.gxp = {1} bytes" -f $n, (Get-Item $out).Length) -ForegroundColor Green }
 }
 
-# fragment-only no-discard variant of game-model
+# Fragment-only no-discard variant of game-model (shares game-model.vs.gxp). Used
+# on Vita for flat opaque geometry so the GPU keeps early-Z (no discard branch).
 & $cgc -profile sce_fp_psp2 -o (Join-Path $cache "game-model-noclip.fs.gxp") (Join-Path $cache "game-model-noclip.fs.cg")
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $cache "game-model-noclip.fs.gxp"))) { Write-Host "FAILED: game-model-noclip.fs" -ForegroundColor Red; $ok = $false }
 else { Write-Host ("OK  {0,-16} fs.gxp = {1} bytes" -f "game-model-noclip", (Get-Item (Join-Path $cache "game-model-noclip.fs.gxp")).Length) -ForegroundColor Green }
 
-if ($ok) { "`nAll shaders compiled to GXP." } else { "`nSome shaders FAILED, see errors above." }
+if ($ok) { "`nAll shaders compiled to GXP." } else { "`nSome shaders FAILED -- see errors above." }

@@ -5,8 +5,8 @@
 #endif
 
 #if defined(__vita__)
-#include <ctype.h> // tolower() for the scimitar-cursor name lookup
-#include "game-data.h" // scimitar item sprite
+#include <ctype.h>       // tolower() for the scimitar-cursor name lookup
+#include "game-data.h"   // game_data.items[] for the scimitar item sprite
 #endif
 
 int an_int_346 = 0;
@@ -185,7 +185,7 @@ void surface_reset_bounds(Surface *surface) {
 }
 
 #ifdef __vita__
-// Case-insensitive substring match (newlib has no strcasestr).
+// case-insensitive substring match (newlib has no strcasestr)
 static int vita_str_contains_ci(const char *haystack, const char *needle) {
     size_t nlen = strlen(needle);
 
@@ -225,7 +225,7 @@ const char *vita_cursor_style_name(int style) {
     return vita_cursor_names[style];
 }
 
-// item id containing needle, cached; -1 until game data loads
+// item id containing needle, cached; -1 until game data loads or no match
 static int vita_cursor_item_id(const char *needle) {
     static const char *cached_needle = NULL;
     static int cached_id = -1;
@@ -248,7 +248,7 @@ static int vita_cursor_item_id(const char *needle) {
     return cached_id;
 }
 
-// virtual-mouse cursor: crosshair or the selected weapon sprite, flipped
+// virtual-mouse cursor: crosshair, or the selected weapon sprite flipped on x
 void vita_draw_cursor(Surface *surface, int x, int y) {
     int arm = 8;
     int style = surface->mud->options->vita_cursor_style;
@@ -259,7 +259,7 @@ void vita_draw_cursor(Surface *surface, int x, int y) {
         int item_id = vita_cursor_item_id(vita_cursor_names[style]);
 
         if (item_id >= 0) {
-            // item sprite flipped horizontally, offset for the cursor hotspot
+            // the item sprite flipped horizontally, offset for the cursor hotspot
             surface_draw_sprite_transform_mask(
                 surface, x - 6, y - 6, 27, 26,
                 surface->mud->sprite_item + game_data.items[item_id].sprite,
@@ -357,7 +357,7 @@ void surface_draw(Surface *surface) {
     if (mud->vita_renderer != NULL && mud->vita_texture != NULL) {
         vita_draw_cursor(surface, mud->mouse_x, mud->mouse_y);
 
-        // forces alpha opaque; vita treats alpha 0 as transparent
+        // forces alpha opaque; the vita display treats alpha 0 as transparent
         {
             uint32_t *px = (uint32_t *)mud->pixel_surface->pixels;
             int count = (mud->pixel_surface->pitch / 4) * mud->pixel_surface->h;
@@ -395,7 +395,7 @@ void surface_draw(Surface *surface) {
 #endif
 
 #if defined(__vita__) && defined(RENDER_GL)
-    // draws the virtual cursor into the gl 2d batch, skipped during capture
+    // draws the virtual cursor into the gl 2d batch, skipped during login capture
     if (!surface->gl_capture_active) {
         vita_draw_cursor(surface, mud->mouse_x, mud->mouse_y);
     }
@@ -1073,14 +1073,12 @@ void surface_parse_sprite(Surface *surface, int sprite_id, int8_t *sprite_data,
     free(sprite_data);
 }
 
-void surface_read_sleep_word(Surface *surface, int sprite_id,
-                             int8_t *sprite_data) {
+// (re)create the sleep-word sprite and return its 0xRRGGBB pixel buffer
+static int32_t *surface_sleep_sprite_pixels(Surface *surface, int sprite_id) {
     if (surface->surface_pixels[sprite_id] == NULL) {
         surface->surface_pixels[sprite_id] =
             malloc(SLEEP_WIDTH * SLEEP_HEIGHT * sizeof(int32_t));
     }
-
-    int32_t *pixels = surface->surface_pixels[sprite_id];
 
     surface->sprite_width[sprite_id] = SLEEP_WIDTH;
     surface->sprite_height[sprite_id] = SLEEP_HEIGHT;
@@ -1089,6 +1087,72 @@ void surface_read_sleep_word(Surface *surface, int sprite_id,
     surface->sprite_width_full[sprite_id] = SLEEP_WIDTH;
     surface->sprite_height_full[sprite_id] = SLEEP_HEIGHT;
     surface->sprite_translate[sprite_id] = 0;
+
+    return surface->surface_pixels[sprite_id];
+}
+
+// push the sleep sprite's pixels to the gl/3ds texture (software blits directly)
+static void surface_sleep_upload(Surface *surface, int sprite_id) {
+#ifdef RENDER_GL
+    int32_t *pixels = surface->surface_pixels[sprite_id];
+    int pixel_index = 0;
+
+    for (int y = 0; y < SLEEP_HEIGHT; y++) {
+        for (int x = 0; x < SLEEP_WIDTH; x++) {
+            int offset = (y * 1024 + x) * 3;
+            int colour = pixels[pixel_index++];
+
+            surface->gl_dynamic_texture_buffer[offset] = (colour >> 16) & 0xff;
+            surface->gl_dynamic_texture_buffer[offset + 1] =
+                (colour >> 8) & 0xff;
+            surface->gl_dynamic_texture_buffer[offset + 2] = colour & 0xff;
+        }
+    }
+
+    surface_gl_update_dynamic_texture(surface);
+#elif defined(RENDER_3DS_GL)
+    int32_t *pixels = surface->surface_pixels[sprite_id];
+    int offset_x = 0;
+    int offset_y = 0;
+
+    if (!surface_3ds_gl_get_sprite_texture_offsets(surface, sprite_id,
+                                                   &offset_x, &offset_y)) {
+        return;
+    }
+
+    uint16_t *texture_data = (uint16_t *)surface->gl_sprite_texture.data;
+    int pixel_index = 0;
+
+    for (int y = 0; y < SLEEP_HEIGHT; y++) {
+        for (int x = 0; x < SLEEP_WIDTH; x++) {
+            int offset = _3ds_gl_translate_texture_index(x + offset_x,
+                                                         y + offset_y, 1024) /
+                         sizeof(uint16_t);
+            int colour = pixels[pixel_index++];
+
+            if (colour) {
+                // RGBA5551 (white = 65535)
+                int r = (colour >> 16) & 0xff;
+                int g = (colour >> 8) & 0xff;
+                int b = colour & 0xff;
+
+                texture_data[offset] = (uint16_t)(((r >> 3) << 11) |
+                                                  ((g >> 3) << 6) |
+                                                  ((b >> 3) << 1) | 1);
+            } else {
+                texture_data[offset] = 1;
+            }
+        }
+    }
+#else
+    (void)surface;
+    (void)sprite_id;
+#endif
+}
+
+void surface_read_sleep_word(Surface *surface, int sprite_id,
+                             int8_t *sprite_data) {
+    int32_t *pixels = surface_sleep_sprite_pixels(surface, sprite_id);
 
     int colour = 0;
     int packet_offset = 1;
@@ -1129,57 +1193,62 @@ void surface_read_sleep_word(Surface *surface, int sprite_id,
         }
     }
 
-#ifdef RENDER_GL
-    pixel_index = 0;
+    surface_sleep_upload(surface, sprite_id);
+}
+
+// in utility.c: platform PNG decode to RGBA8 (NULL = no decoder)
+uint8_t *sleep_png_decode_rgba(const uint8_t *png, int png_length, int *width,
+                               int *height);
+
+// the PNG captcha OpenRSC sends custom-client logins; returns 0 if undecodable
+int surface_read_sleep_png(Surface *surface, int sprite_id, const int8_t *png,
+                           int png_length) {
+    int width = 0;
+    int height = 0;
+    uint8_t *rgba = sleep_png_decode_rgba((const uint8_t *)png, png_length,
+                                          &width, &height);
+
+    if (rgba == NULL || width <= 0 || height <= 0) {
+        free(rgba);
+        return 0;
+    }
+
+    int32_t *pixels = surface_sleep_sprite_pixels(surface, sprite_id);
+
+    float scale = 1.0f;
+
+    if (width > SLEEP_WIDTH) {
+        scale = (float)width / SLEEP_WIDTH;
+    }
+
+    if (height > SLEEP_HEIGHT && (float)height / SLEEP_HEIGHT > scale) {
+        scale = (float)height / SLEEP_HEIGHT;
+    }
 
     for (int y = 0; y < SLEEP_HEIGHT; y++) {
-        for (int x = 0; x < SLEEP_WIDTH; x++) {
-            int offset = (y * 1024 + x) * 3;
+        int source_y = (int)(y * scale);
 
-            if (pixels[pixel_index]) {
-                surface->gl_dynamic_texture_buffer[offset] = 255;
-                surface->gl_dynamic_texture_buffer[offset + 1] = 255;
-                surface->gl_dynamic_texture_buffer[offset + 2] = 255;
-            } else {
-                surface->gl_dynamic_texture_buffer[offset] = 0;
-                surface->gl_dynamic_texture_buffer[offset + 1] = 0;
-                surface->gl_dynamic_texture_buffer[offset + 2] = 0;
+        for (int x = 0; x < SLEEP_WIDTH; x++) {
+            int source_x = (int)(x * scale);
+            int colour = 0;
+
+            if (source_x < width && source_y < height) {
+                const uint8_t *p = rgba + (source_y * width + source_x) * 4;
+
+                if (p[3] >= 128) {
+                    colour = (p[0] << 16) | (p[1] << 8) | p[2];
+                }
             }
 
-            pixel_index++;
+            pixels[y * SLEEP_WIDTH + x] = colour;
         }
     }
 
-    surface_gl_update_dynamic_texture(surface);
-#elif defined(RENDER_3DS_GL)
-    int offset_x = 0;
-    int offset_y = 0;
+    free(rgba);
 
-    if (!surface_3ds_gl_get_sprite_texture_offsets(surface, sprite_id,
-                                                   &offset_x, &offset_y)) {
-        return;
-    }
+    surface_sleep_upload(surface, sprite_id);
 
-    uint16_t *texture_data = (uint16_t *)surface->gl_sprite_texture.data;
-
-    pixel_index = 0;
-
-    for (int y = 0; y < SLEEP_HEIGHT; y++) {
-        for (int x = 0; x < SLEEP_WIDTH; x++) {
-            int offset = _3ds_gl_translate_texture_index(x + offset_x,
-                                                         y + offset_y, 1024) /
-                         sizeof(uint16_t);
-
-            if (pixels[pixel_index]) {
-                texture_data[offset] = 65535;
-            } else {
-                texture_data[offset] = 1;
-            }
-
-            pixel_index++;
-        }
-    }
-#endif
+    return 1;
 }
 
 void surface_screen_raster_to_palette_sprite(Surface *surface, int sprite_id) {
@@ -3231,7 +3300,7 @@ void surface_draw_paragraph(Surface *surface, const char *text, int x, int y,
     size_t end = 0;
     size_t text_length = strlen(text);
 
-    // fix_overhead_chat (config 41): a wrapped line re-starts in the last @col@ code seen before the wrap
+    // fix_overhead_chat (config 41): a wrapped line re-starts in the last @col@ code before the wrap
     int carry_enabled = 0;
     char carry_code[6] = {0};
     char latest_code[6] = {0};

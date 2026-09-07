@@ -1,4 +1,5 @@
 #include "appearance.h"
+#include "worldlist.h" // worldlist_bots_appearance_accept (Bot Manager reuse)
 
 #ifdef WITH_SINGLEPLAYER
 #include "../singleplayer.h"
@@ -26,7 +27,7 @@ struct appearance_buttons {
 static struct appearance_buttons
 mudclient_create_appearance_box(mudclient *mud, char *type, int x, int y);
 
-// control-id ranges for the mode/class/xp-rate selector rows
+// [start, end) control-id ranges for the mode/class/xp-rate selector rows
 static int appearance_ironman_row_start = 0;
 static int appearance_ironman_row_end = 0;
 static int appearance_class_row_start = 0;
@@ -38,8 +39,8 @@ static int appearance_onexp_row_end = 0;
 static void appearance_apply_creation_gating(mudclient *mud, int *out_show_ironman,
                                              int *out_show_class,
                                              int *out_show_onexp) {
-    // online: SEND_SERVER_CONFIGS position 71; 0 none, 1 ironman + 1X, 2 classes.
-    // authentic 177/204 worlds have no configs packet, so the guard lands them on 0
+    // online creation mode from SEND_SERVER_CONFIGS position 71: 0 none, 1 ironman + 1x,
+    // 2 classes; authentic worlds have no configs packet so they resolve to 0
     int mode = mud->protocol_custom ? mud->orsc.character_creation_mode : 0;
     int show_ironman = mode == 1;
     int show_class = mode == 2;
@@ -47,7 +48,7 @@ static void appearance_apply_creation_gating(mudclient *mud, int *out_show_ironm
 
 #ifdef WITH_SINGLEPLAYER
     if (mud->singleplayer) {
-        // SP worlds gate by their own rules; the 1X choice is offered everywhere
+        // SP worlds gate by their own rules; the 1x choice is offered everywhere
         show_ironman = singleplayer_world_spawns_ironman();
         show_class = singleplayer_world_uses_classes();
         show_onexp = 1;
@@ -56,6 +57,13 @@ static void appearance_apply_creation_gating(mudclient *mud, int *out_show_ironm
         show_ironman = 1;
         show_class = 1;
         show_onexp = 1;
+    }
+
+    // a bot's look (Bot Manager): mode/class/xp rate are a player's choices, not a bot's
+    if (worldlist_bots_appearance_active()) {
+        show_ironman = 0;
+        show_class = 0;
+        show_onexp = 0;
     }
 #endif
 
@@ -129,7 +137,7 @@ mudclient_create_appearance_box(mudclient *mud, char *type, int x, int y) {
 
     struct appearance_buttons buttons = {0};
 
-    // draws cycler arrows as text glyphs instead of sprite arrows
+    // draw the cycler arrows as text "<"/">" glyphs instead of the media arrow sprites
     buttons.left =
         panel_add_button(mud->panel_appearance, x - 40, y,
                          APPEARANCE_ARROW_SIZE, APPEARANCE_ARROW_SIZE);
@@ -220,7 +228,7 @@ void mudclient_create_appearance_panel(mudclient *mud) {
     mud->control_appearance_bottom_left = bottom_buttons.left;
     mud->control_appearance_bottom_right = bottom_buttons.right;
 
-    // creation selectors: mode, class, xp-rate as arrow cyclers
+    // creation selectors (mode/class/xp-rate) as arrow cyclers in a right-hand column
     int selector_x =
         (is_compact ? MUD_MIN_WIDTH : MUD_VANILLA_WIDTH) - APPEARANCE_COLUMN_WIDTH - 24;
     int selector_y = (is_compact ? 40 : 60);
@@ -374,7 +382,12 @@ void mudclient_handle_appearance_panel_input(mudclient *mud) {
             (mud->appearance_top_colour + 1) % top_bottom_colours_length;
     }
 
-    // skin colours beyond five are only selectable once unlocked
+    /* The skin palette holds OpenRSC's unlockable colours beyond the original
+     * five, but a colour is only SELECTABLE where the world has unlocked it --
+     * their cycler steps over locked entries (mudclient.java's do/while on
+     * unlockedSkinColours, whose defaults are exactly the first five). On
+     * authentic/SP worlds nothing beyond those five is ever unlocked, so this
+     * behaves identically to the old fixed-5 cycler. */
     int skin_colours_length = PLAYER_SKIN_COLOUR_COUNT;
 
     if (panel_is_clicked(mud->panel_appearance,
@@ -423,7 +436,7 @@ void mudclient_handle_appearance_panel_input(mudclient *mud) {
             (mud->appearance_ironman_mode + 1) % APPEARANCE_IRONMAN_MODE_COUNT;
     }
 
-    // OpenRSC character-class cycler (Classes ordinal 0..5)
+    // character-class cycler (Classes ordinal 0..5)
     if (panel_is_clicked(mud->panel_appearance,
                          mud->control_appearance_class_left)) {
         mud->appearance_class =
@@ -437,7 +450,7 @@ void mudclient_handle_appearance_panel_input(mudclient *mud) {
             (mud->appearance_class + 1) % APPEARANCE_CLASS_COUNT;
     }
 
-    // OpenRSC one-xp toggle (0 = world xp rate, 1 = original 1x)
+    // one-xp toggle (0 = world xp rate, 1 = original 1x)
     if (panel_is_clicked(mud->panel_appearance,
                          mud->control_appearance_onexp_left) ||
         panel_is_clicked(mud->panel_appearance,
@@ -447,6 +460,11 @@ void mudclient_handle_appearance_panel_input(mudclient *mud) {
 
     if (panel_is_clicked(mud->panel_appearance,
                          mud->control_appearance_accept)) {
+        // Bot Manager reuse: editing a bot's look saves it onto the def, no create packet
+        if (worldlist_bots_appearance_accept(mud)) {
+            surface_black_screen(mud->surface);
+            return;
+        }
         packet_stream_new_packet(mud->packet_stream, CLIENT_APPEARANCE);
         packet_stream_put_byte(mud->packet_stream, mud->appearance_head_gender);
         packet_stream_put_byte(mud->packet_stream, mud->appearance_head_type);
@@ -464,7 +482,7 @@ void mudclient_handle_appearance_panel_input(mudclient *mud) {
         packet_stream_put_byte(mud->packet_stream, mud->appearance_ironman_mode);
         packet_stream_put_byte(mud->packet_stream, mud->appearance_one_xp);
 
-        // class byte is an extension for the embedded sp server only
+        // class byte is an extension for the embedded sp server only, never sent to a custom world
         if (!mud->protocol_custom) {
             packet_stream_put_byte(mud->packet_stream, mud->appearance_class);
         }
@@ -480,14 +498,14 @@ void mudclient_draw_appearance_panel(mudclient *mud) {
     mud->surface->interlace = 0;
     surface_black_screen(mud->surface);
 
-    // hides mode/class/xp-rate rows before the panel draws
+    // hide the mode/class/xp-rate rows before the panel draws
     int show_ironman, show_class, show_onexp;
     appearance_apply_creation_gating(mud, &show_ironman, &show_class,
                                      &show_onexp);
 
     panel_draw_panel(mud->panel_appearance);
 
-    // draws the selected mode/class/xp-rate text under each cycler
+    // draw the selected mode/class/xp-rate text under each cycler
     int panel_off_x = mud->panel_appearance->offset_x;
     int panel_off_y = mud->panel_appearance->offset_y;
 
@@ -509,7 +527,7 @@ void mudclient_draw_appearance_panel(mudclient *mud) {
     }
 
     if (show_onexp) {
-        // the real creation screen words the 1X question with the world's rate (config 72)
+        // the creation screen words the 1x question with the world's rate (config 72)
         char one_xp_rate_label[16];
         const char *one_xp_label =
             appearance_one_xp_names[mud->appearance_one_xp];

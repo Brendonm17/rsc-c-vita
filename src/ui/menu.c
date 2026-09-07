@@ -23,7 +23,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_GROUNDITEM);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom cast order: spell, x, y, item id (spell first)
+            // custom ground-item cast: spell, x, y, item id
             packet_stream_put_short(mud->packet_stream, menu_source_index);
             packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
             packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
@@ -49,7 +49,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom order reverses the last two fields: slot then item id
+            // custom ground-item use-item: x, y, slot, item id
             packet_stream_put_short(mud->packet_stream, menu_source_index);
             packet_stream_put_short(mud->packet_stream, menu_index);
         } else
@@ -72,7 +72,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_put_short(mud->packet_stream, menu_index);
 
 #ifndef REVISION_177
-        // trailing junk short: authentic-only, the custom parser rejects it
+        // trailing junk short: authentic only, the custom parser rejects it
         if (!mud->protocol_custom)
 #endif
         {
@@ -143,7 +143,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_OBJECT);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom cast order: spell, x, y (spell first)
+            // custom scenery cast: spell, x, y
             packet_stream_put_short(mud->packet_stream, menu_target_index);
             packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
             packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
@@ -196,7 +196,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_INVITEM);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom CAST_ON_INVENTORY_ITEM = spell, slot (spell first)
+            // custom inventory-item cast: spell, slot
             packet_stream_put_short(mud->packet_stream, menu_source_index);
             packet_stream_put_short(mud->packet_stream, menu_index);
         } else
@@ -224,11 +224,11 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         break;
 #ifndef REVISION_177
     case MENU_INVENTORY_AUCTION:
-        // auction sell mode: index carries the item id; prompts follow
+        // auction sell mode: index carries the item id, prompts follow
         mudclient_auction_start_sell(mud, menu_index);
         break;
     case MENU_CLAN_RANK:
-        // 199 clan/rank-player packet: member name, new rank
+        // 199 clan rank-player packet: name, rank
         if (menu_index >= 0 && menu_index < mud->orsc_clan_size) {
             packet_stream_new_packet(mud->packet_stream,
                                      CLIENT_INTERFACE_OPTIONS);
@@ -263,7 +263,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         }
         break;
     case MENU_CLAN_SETTING:
-        // 199 clan/clan-settings packet: mode, state
+        // 199 clan-settings packet: mode, state
         packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
         packet_stream_put_byte(mud->packet_stream, INTERFACE_OPTION_CLAN);
         packet_stream_put_byte(mud->packet_stream, CLAN_OPTION_CLAN_SETTINGS);
@@ -281,7 +281,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_send_packet(mud->packet_stream);
         break;
     case MENU_PARTY_SHARE:
-        // toggles share-loot or share-exp via chat command
+        // shareloot / shareexp chat commands toggle the player's share settings
         mudclient_send_command_string(mud,
                                       menu_index == 0 ? "shareloot"
                                                       : "shareexp");
@@ -350,7 +350,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
 
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom item-command packet adds i32 amount, u8 command index
+            // custom item-command packet adds i32 amount and u8 command index
             packet_stream_put_int(mud->packet_stream, 1);
             packet_stream_put_byte(mud->packet_stream, menu_source_index);
         }
@@ -360,7 +360,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         break;
 #ifndef REVISION_177
     case MENU_INVENTORY_COMMAND_ALL:
-        // "Bury All": the command packet with the whole count; server batching does the rest
+        // "Bury All": the command packet with the whole item count
         packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_COMMAND);
         packet_stream_put_short(mud->packet_stream, menu_index);
         packet_stream_put_int(
@@ -371,7 +371,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_send_packet(mud->packet_stream);
         break;
     case MENU_EQUIP_COMMAND:
-        // 0xFFFF sentinel, quantity 1, then the equipped item's ID and the command index
+        // 0xFFFF sentinel, quantity 1, then the equipped item id and command index
         packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_COMMAND);
         packet_stream_put_short(mud->packet_stream, 0xFFFF);
         packet_stream_put_int(mud->packet_stream, 1);
@@ -381,7 +381,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_send_packet(mud->packet_stream);
         break;
     case MENU_EQUIP_USE:
-        // the selection becomes the virtual inventory index slot + 30; use-with senders carry it unchanged
+        // selection becomes the virtual inventory index (slot + 30) for use-with
         mud->selected_item_inventory_index = menu_index + INVENTORY_ITEMS_MAX;
         mud->show_ui_tab = 0;
 
@@ -389,7 +389,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
             game_data.items[mud->equipped_item_id[menu_index]].name;
         break;
     case MENU_EQUIP_DROP: {
-        // 0xFFFF sentinel, the equipped amount, then the item ID
+        // 0xFFFF sentinel, the equipped amount, then the item id
         packet_stream_new_packet(mud->packet_stream, CLIENT_INVENTORY_DROP);
         packet_stream_put_short(mud->packet_stream, 0xFFFF);
         packet_stream_put_int(mud->packet_stream,
@@ -520,7 +520,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_NPC);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom CAST_ON_NPC = spell, npcIndex (spell first)
+            // custom npc cast: spell, npc index
             packet_stream_put_short(mud->packet_stream, menu_source_index);
             packet_stream_put_short(mud->packet_stream, menu_index);
         } else
@@ -531,7 +531,10 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         }
         packet_stream_send_packet(mud->packet_stream);
 
-        mud->selected_spell = -1;
+        // auto-cast: keep the spell armed so the next click re-casts it
+        if (!mud->options->autocast) {
+            mud->selected_spell = -1;
+        }
         break;
     }
     case MENU_USEWITH_NPC: {
@@ -572,7 +575,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         mudclient_walk_to_action_source(mud, mud->local_region_x,
                                         mud->local_region_y, x, y, 1);
 
-        // 202 selects command1, 203 selects command2
+        // 202 selects command1, 203 command2
         packet_stream_new_packet(mud->packet_stream,
 #ifndef REVISION_177
                                  menu_type == MENU_NPC_COMMAND2
@@ -611,7 +614,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_PLAYER);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom PLAYER_CAST_PVP = spell, playerIndex (spell first)
+            // custom player cast: spell, player index
             packet_stream_put_short(mud->packet_stream, menu_source_index);
             packet_stream_put_short(mud->packet_stream, menu_index);
         } else
@@ -622,7 +625,10 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         }
         packet_stream_send_packet(mud->packet_stream);
 
-        mud->selected_spell = -1;
+        // auto-cast: keep the spell armed so the next click re-casts it
+        if (!mud->options->autocast) {
+            mud->selected_spell = -1;
+        }
         break;
     }
     case MENU_USEWITH_PLAYER: {
@@ -670,7 +676,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         break;
 #ifndef REVISION_177
     case MENU_PLAYER_PARTY_INVITE:
-        // 199, party sub-op 12, action 2, u16 server index
+        // party invite: 199, party sub-op 12, action 2, u16 server index
         packet_stream_new_packet(mud->packet_stream, CLIENT_INTERFACE_OPTIONS);
         packet_stream_put_byte(mud->packet_stream, 12);
         packet_stream_put_byte(mud->packet_stream, 2);
@@ -685,7 +691,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         packet_stream_new_packet(mud->packet_stream, CLIENT_CAST_GROUND);
 #ifndef REVISION_177
         if (mud->protocol_custom) {
-            // custom cast order: spell, x, y (spell first)
+            // custom land cast: spell, x, y
             packet_stream_put_short(mud->packet_stream, menu_index);
             packet_stream_put_short(mud->packet_stream, menu_x + mud->region_x);
             packet_stream_put_short(mud->packet_stream, menu_y + mud->region_y);
@@ -732,7 +738,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
         int is_withdraw = menu_type == MENU_BANK_WITHDRAW;
 
 #ifndef REVISION_177
-        // remembered across the offer-X dialog, like the real client's uncertMode argument
+        // remembered across the offer-x dialog
         mud->bank_offer_uncert = menu_type == MENU_BANK_DEPOSIT_UNCERT;
 #endif
 
@@ -811,7 +817,7 @@ void mudclient_menu_item_click(mudclient *mud, int i) {
             },
             encoded_url);
 #elif defined(__vita__)
-        // no shell to open the wiki link on vita; no-op
+        // no shell or browser on vita to open the wiki link; no-op
         (void)encoded_url;
 #else
         char formatted_command[256];
@@ -948,8 +954,7 @@ void mudclient_create_top_mouse_menu(mudclient *mud) {
 
         if (is_touch) {
             if (mud->options->touch_bottom_ui) {
-                // the tab strip owns the bottom edge; the hover text takes
-                // the freed top strip (chat text starts at y 32)
+                // tab strip owns the bottom edge; hover text takes the freed top strip (chat at y 32)
                 y_position = 12;
             } else {
                 if (mud->options->display_fps == 0) {
@@ -1558,7 +1563,7 @@ void mudclient_create_right_click_menu(mudclient *mud) {
                     }
 
 #ifndef REVISION_177
-                    // npc command2: a second, optional npc action
+                    // npc command2: a second, optional npc action on custom worlds
                     if (game_data.npcs[npc_id].command2 != NULL &&
                         strlen(game_data.npcs[npc_id].command2) > 0) {
                         snprintf(
@@ -1681,8 +1686,8 @@ void mudclient_create_right_click_menu(mudclient *mud) {
                         game_data.wall_objects[wall_object_id].command2;
 
 #ifndef REVISION_177
-                    // want_leftclick_webs builds the web def as Slice/WalkTo; substituted per menu build instead of
-                    // mutating game_data, which loads once and must stay authentic for a later authentic session
+                    // want_leftclick_webs builds the web def as Slice/WalkTo,
+                    // substituted per menu build rather than mutating game_data
                     if (mud->protocol_custom &&
                         mud->orsc.want_leftclick_webs &&
                         strcasecmp(

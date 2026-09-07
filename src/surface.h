@@ -78,7 +78,7 @@ typedef struct gl_atlas_position {
 #include "gl/textures/custom.h"
 #include "gl/textures/custom-entities.h"
 
-#define GL_MAX_QUADS 2048
+#define GL_MAX_QUADS 4096
 
 typedef struct SurfaceGlContext {
 #ifdef RENDER_GL
@@ -344,6 +344,8 @@ void surface_parse_sprite_tga(Surface *surface, int sprite_id,
                               int rows);
 void surface_parse_sprite(Surface *surface, int sprite_id, int8_t *sprite_data,
                           int8_t *index_data, int frame_count);
+int surface_read_sleep_png(Surface *surface, int sprite_id, const int8_t *png,
+                           int png_length);
 void surface_read_sleep_word(Surface *surface, int sprite_id,
                              int8_t *sprite_data);
 int32_t *surface_palette_sprite_to_raster(Surface *surface, int sprite_id,
